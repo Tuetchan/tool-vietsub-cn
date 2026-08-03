@@ -8,7 +8,7 @@ import subprocess
 
 st.set_page_config(page_title="Auto Vietsub Tool", page_icon="🎬")
 st.title("🎬 Tool Auto Vietsub Phim Trung Quốc bằng Gemini")
-st.write("Tạo file phụ đề Vietsub (.srt) từ đường link hoặc tệp video tải lên")
+st.write("Tạo file phụ đề Vietsub (.srt) và gắn trực tiếp vào video")
 
 # Nhập API Key
 api_key = st.text_input("Nhập Gemini API Key của bạn:", type="password", help="Lấy API Key miễn phí tại Google AI Studio")
@@ -48,10 +48,14 @@ if st.button("Bắt đầu xử lý"):
     else:
         try:
             genai.configure(api_key=api_key)
-            model = genai.GenerativeModel('gemini-3.5-flash')
+            model = genai.GenerativeModel('gemini-1.5-flash')
 
             mp3_file = "temp_audio.mp3"
-            cleanup_files(mp3_file) # Dọn dẹp nếu có file cũ
+            output_video_file = "video_vietsub_output.mp4"
+            temp_video_path = "temp_video.mp4"
+            
+            # Dọn dẹp file cũ
+            cleanup_files(mp3_file, output_video_file, temp_video_path, "phu_de_vietsub.srt") 
 
             # TRƯỜNG HỢP 1: Tải video trực tiếp từ thiết bị
             if option == "Tải tệp video từ máy (MP4, MOV,...)":
@@ -59,31 +63,24 @@ if st.button("Bắt đầu xử lý"):
                 
                 # Lưu file video tạm thời
                 file_ext = uploaded_file.name.split('.')[-1]
-                temp_video_path = f"uploaded_video.{file_ext}"
+                temp_video_path = f"temp_uploaded_video.{file_ext}"
                 with open(temp_video_path, "wb") as f:
                     f.write(uploaded_file.getbuffer())
 
                 st.info("Đang tách âm thanh bằng FFmpeg...")
-                # Gọi trực tiếp lệnh FFmpeg của hệ thống để trích xuất âm thanh
                 cmd = f'ffmpeg -i "{temp_video_path}" -vn -ar 44100 -ac 2 -b:a 192k "{mp3_file}" -y'
                 subprocess.run(cmd, shell=True, check=True)
-                
-                cleanup_files(temp_video_path)
 
             # TRƯỜNG HỢP 2: Tải video từ Link Douyin / Xiaohongshu
             else:
                 clean_url = extract_clean_url(raw_video_input)
                 st.write(f"🔗 Link xử lý: `{clean_url}`")
-                st.info("Đang tải âm thanh từ đường link...")
+                st.info("Đang tải toàn bộ Video từ đường link...")
 
+                # Đổi thiết lập yt-dlp để tải VIDEO thay vì chỉ tải AUDIO
                 ydl_opts = {
-                    'format': 'bestaudio/best',
-                    'postprocessors': [{
-                        'key': 'FFmpegExtractAudio',
-                        'preferredcodec': 'mp3',
-                        'preferredquality': '192',
-                    }],
-                    'outtmpl': 'temp_audio.%(ext)s',
+                    'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+                    'outtmpl': temp_video_path, # Lưu thành temp_video.mp4
                     'quiet': True,
                     'no_warnings': True,
                     'http_headers': {
@@ -95,6 +92,10 @@ if st.button("Bắt đầu xử lý"):
 
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     ydl.download([clean_url])
+                
+                st.info("Đang tách âm thanh từ video đã tải...")
+                cmd = f'ffmpeg -i "{temp_video_path}" -vn -ar 44100 -ac 2 -b:a 192k "{mp3_file}" -y'
+                subprocess.run(cmd, shell=True, check=True)
 
             st.success("Tách âm thanh thành công!")
 
@@ -122,20 +123,39 @@ if st.button("Bắt đầu xử lý"):
             srt_filename = "phu_de_vietsub.srt"
             with open(srt_filename, "w", encoding="utf-8") as f:
                 f.write(srt_content)
+            
+            genai.delete_file(uploaded_audio.name)
 
-            st.success("Dịch hoàn tất! Bạn có thể tải file phụ đề bên dưới.")
+            # ==== BƯỚC MỚI: GHÉP PHỤ ĐỀ VÀO VIDEO BẰNG FFMPEG ====
+            st.info("Đang tiến hành ghép phụ đề cứng vào video (Quá trình này có thể mất vài phút tùy độ dài video)...")
+            
+            # Sử dụng bộ lọc subtitles của ffmpeg. Lưu ý: ffmpeg cần ghi đè file lại nên sẽ tốn chút thời gian render
+            cmd_merge = f'ffmpeg -i "{temp_video_path}" -vf "subtitles={srt_filename}" -c:a copy "{output_video_file}" -y'
+            subprocess.run(cmd_merge, shell=True, check=True)
 
-            with open(srt_filename, "rb") as file:
+            st.success("🎉 Hoàn tất toàn bộ quá trình! Bạn có thể tải thành quả bên dưới.")
+
+            # Nút tải file SRT
+            with open(srt_filename, "rb") as file_srt:
                 st.download_button(
-                    label="📥 Tải file phụ đề (.srt)",
-                    data=file,
+                    label="📝 Tải file phụ đề (.srt)",
+                    data=file_srt,
                     file_name="vietsub.srt",
                     mime="text/plain"
                 )
+            
+            # Nút tải file Video đã có phụ đề
+            with open(output_video_file, "rb") as file_vid:
+                st.download_button(
+                    label="🎬 Tải Video đã gắn Vietsub (.mp4)",
+                    data=file_vid,
+                    file_name="video_vietsub_thanhcong.mp4",
+                    mime="video/mp4"
+                )
 
-            genai.delete_file(uploaded_audio.name)
-            cleanup_files(mp3_file, srt_filename)
+            # Tùy chọn: Dọn dẹp file tạm để tiết kiệm dung lượng server
+            cleanup_files(mp3_file, temp_video_path)
 
         except Exception as e:
             st.error(f"Đã xảy ra lỗi: {e}")
-            cleanup_files("temp_audio.mp3", "temp_audio.webm", "temp_audio.m4a", "phu_de_vietsub.srt")
+            cleanup_files("temp_audio.mp3", "temp_uploaded_video.*", "temp_video.mp4", "phu_de_vietsub.srt", "video_vietsub_output.mp4")
