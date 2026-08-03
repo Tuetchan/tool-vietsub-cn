@@ -4,6 +4,7 @@ import os
 import google.generativeai as genai
 import time
 import re
+from moviepy.editor import VideoFileClip
 
 st.set_page_config(page_title="Auto Vietsub Tool", page_icon="🎬")
 st.title("🎬 Tool Auto Vietsub Phim Trung Quốc bằng Gemini")
@@ -49,32 +50,22 @@ if st.button("Bắt đầu xử lý"):
             genai.configure(api_key=api_key)
             model = genai.GenerativeModel('gemini-3.5-flash')
 
-            audio_filename = "temp_audio"
-            mp3_file = f"{audio_filename}.mp3"
+            mp3_file = "temp_audio.mp3"
 
             # TRƯỜNG HỢP 1: Tải video trực tiếp từ thiết bị
             if option == "Tải tệp video từ máy (MP4, MOV,...)":
                 st.info("Đang xử lý tệp video tải lên...")
                 
-                # Lưu file video tạm thời lên máy chủ
-                temp_video_path = f"uploaded_video.{uploaded_file.name.split('.')[-1]}"
+                # Lưu file video tạm thời
+                file_ext = uploaded_file.name.split('.')[-1]
+                temp_video_path = f"uploaded_video.{file_ext}"
                 with open(temp_video_path, "wb") as f:
                     f.write(uploaded_file.getbuffer())
 
                 st.info("Đang tách âm thanh từ tệp video...")
-                ydl_opts = {
-                    'format': 'bestaudio/best',
-                    'postprocessors': [{
-                        'key': 'FFmpegExtractAudio',
-                        'preferredcodec': 'mp3',
-                        'preferredquality': '192',
-                    }],
-                    'outtmpl': f'{audio_filename}.%(ext)s',
-                    'quiet': True,
-                }
-                
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    ydl.download([temp_video_path])
+                video_clip = VideoFileClip(temp_video_path)
+                video_clip.audio.write_audiofile(mp3_file, verbose=False, logger=None)
+                video_clip.close()
                 
                 cleanup_files(temp_video_path)
 
@@ -91,7 +82,7 @@ if st.button("Bắt đầu xử lý"):
                         'preferredcodec': 'mp3',
                         'preferredquality': '192',
                     }],
-                    'outtmpl': f'{audio_filename}.%(ext)s',
+                    'outtmpl': 'temp_audio.%(ext)s',
                     'quiet': True,
                     'no_warnings': True,
                     'http_headers': {
