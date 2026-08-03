@@ -8,7 +8,7 @@ import subprocess
 
 st.set_page_config(page_title="Auto Vietsub Tool", page_icon="🎬", layout="wide")
 st.title("🎬 Tool Auto Vietsub Phim Trung Quốc bằng Gemini")
-st.write("Căn chỉnh phụ đề khớp chính xác theo giọng nói trong Video -> Xem/Sửa -> Ghép video")
+st.write("Tạo phụ đề Song ngữ (Trung - Việt) -> Kiểm tra & Sửa -> Ghép vào Video")
 
 # Nhập API Key
 api_key = st.text_input("Nhập Gemini API Key của bạn:", type="password", help="Lấy API Key miễn phí tại Google AI Studio")
@@ -45,9 +45,9 @@ def extract_clean_url(text):
     return text.strip()
 
 # ==========================================
-# BƯỚC 1: PHÂN TÍCH & DỊCH KHỚP THEO TIẾNG NÓI
+# BƯỚC 1: PHÂN TÍCH & DỊCH SONG NGỮ (TRUNG - VIỆT)
 # ==========================================
-st.subheader("Bước 1: Trích xuất & Dịch chuẩn khớp nhịp thoại")
+st.subheader("Bước 1: Trích xuất & Dịch phụ đề Song ngữ")
 
 if st.button("🚀 Bắt đầu phân tích Video & Dịch"):
     if not api_key:
@@ -60,7 +60,7 @@ if st.button("🚀 Bắt đầu phân tích Video & Dịch"):
         try:
             genai.configure(api_key=api_key)
             
-            # Khai báo model theo yêu cầu
+            # Khuyên dùng 'gemini-3.5-flash' hoặc 'gemini-2.5-flash-latest' để đảm bảo không bị lỗi 404
             model = genai.GenerativeModel('gemini-3.5-flash')
 
             temp_video_path = "temp_video.mp4"
@@ -92,7 +92,7 @@ if st.button("🚀 Bắt đầu phân tích Video & Dịch"):
             st.session_state.temp_video_path = temp_video_path
 
             # 2. Upload Video lên Gemini File API
-            st.info("Đang tải Video lên AI để bắt nhịp âm thanh giọng nói...")
+            st.info("Đang tải Video lên AI để phân tích hình ảnh và âm thanh...")
             uploaded_video = genai.upload_file(path=temp_video_path)
             
             while uploaded_video.state.name == "PROCESSING":
@@ -102,28 +102,30 @@ if st.button("🚀 Bắt đầu phân tích Video & Dịch"):
             if uploaded_video.state.name == "FAILED":
                 raise Exception("Tải video lên Gemini AI thất bại.")
 
-            st.info("Gemini đang nghe giọng nói, căn mốc thời gian và dịch ra tiếng Việt...")
+            st.info("Gemini đang trích xuất tiếng Trung và dịch sang tiếng Việt...")
             
-            # PROMPT TẬP TRUNG VÀO BẮT MỐC THỜI GIAN KHỚP ÂM THANH
+            # PROMPT YÊU CẦU TẠO PHỤ ĐỀ SONG NGỮ (TIẾNG TRUNG + TIẾNG VIỆT)
             prompt = """
-            Bạn là chuyên gia làm phụ đề phim chuyên nghiệp.
+            Bạn là chuyên gia dịch thuật phim Trung Quốc.
 
-            NHIỆM VỤ QUAN TRỌNG NHẤT - CẮN CHỈNH THỜI GIAN THEO ÂM THANH (AUDIO SYNCHRONIZATION):
-            1. Mốc thời gian (start_time --> end_time) của từng câu phụ đề BẮT BUỘC phải căn theo GIỌNG NÓI / ÂM THANH THOẠI thực tế trong video:
-               - Thời gian bắt đầu: Đúng khoảnh khắc nhân vật BẮT ĐẦU cất tiếng nói.
-               - Thời gian kết thúc: Đúng khoảnh khắc nhân vật DỪNG nói câu đó.
-            2. Tuyệt đối KHÔNG căn thời gian theo độ dài của chữ viết trên màn hình hay độ dài câu dịch, để tránh bị lệch tiếng.
-            3. QUY TẮC CÂU NGẮN: Mới mỗi nhịp nói ngắt câu, ngắt phụ đề thành dòng ngắn (tối đa 5-8 từ). Không gộp nhiều câu nói vào một dòng dài.
-            4. Trình bày CHÍNH XÁC theo chuẩn định dạng tệp phụ đề .srt (hh:mm:ss,ms). Không thêm ký tự hay giải thích markdown nào ngoài chuẩn SRT.
+            NHIỆM VỤ:
+            1. Nghe âm thanh thoại và quan sát chữ trên màn hình video để tạo phụ đề SONG NGỮ TRUNG - VIỆT.
+            2. Căn mốc thời gian (start_time --> end_time) khớp chính xác theo nhịp cất giọng nói của nhân vật.
+            3. QUY TẮC ĐỊNH DẠNG SONG NGỮ: Mỗi ô phụ đề BẮT BUỘC có 2 dòng:
+               - Dòng 1: Câu tiếng Trung gốc (Chữ Hán)
+               - Dòng 2: Bản dịch tiếng Việt tương ứng (ngắn gọn, tự nhiên, dưới 9 từ)
+            4. Xuất ra chuẩn định dạng tệp .srt. Không thêm bất kỳ lời giải thích hay ký tự markdown nào khác.
 
-            Ví dụ định dạng chuẩn:
+            Ví dụ định dạng chuẩn bắt buộc:
             1
             00:00:01,200 --> 00:00:03,150
-            Tôi không tin chuyện này.
+            胡说八道！
+            Nói bậy bạ!
 
             2
             00:00:03,400 --> 00:00:05,000
-            Anh nói thật chứ?
+            终于露面了。
+            Cuối cùng cũng lộ diện rồi.
             """
 
             response = model.generate_content([prompt, uploaded_video])
@@ -131,22 +133,22 @@ if st.button("🚀 Bắt đầu phân tích Video & Dịch"):
 
             st.session_state.srt_content = srt_text
             genai.delete_file(uploaded_video.name)
-            st.success("Dịch và căn khớp thời gian thành công! Hãy kiểm tra nội dung dưới đây.")
+            st.success("Tạo phụ đề Song ngữ thành công! Hãy kiểm tra nội dung dưới đây.")
 
         except Exception as e:
             st.error(f"Đã xảy ra lỗi: {e}")
 
 # ==========================================
-# BƯỚC 2: XEM / SỬA PHỤ ĐỀ & ĐÓNG VÀO VIDEO
+# BƯỚC 2: KIỂM TRA SONG NGỮ & GHÉP VÀO VIDEO
 # ==========================================
 if st.session_state.srt_content:
     st.divider()
-    st.subheader("Bước 2: Kiểm tra, Sửa lời dịch & Ghép vào Video")
+    st.subheader("Bước 2: Kiểm tra Phụ đề Song ngữ (Trung - Việt) & Ghép vào Video")
     
     edited_srt = st.text_area(
-        label="Chỉnh sửa nội dung hoặc mốc thời gian nếu cần:",
+        label="Nội dung phụ đề Song ngữ (Bạn có thể xem chữ Trung gốc và chỉnh sửa tiếng Việt trực tiếp tại đây):",
         value=st.session_state.srt_content,
-        height=350
+        height=380
     )
 
     if st.button("🎬 Xác nhận & Ghép phụ đề vào Video"):
@@ -157,28 +159,28 @@ if st.session_state.srt_content:
             with open(srt_filename, "w", encoding="utf-8") as f:
                 f.write(edited_srt)
 
-            st.info("Đang dùng FFmpeg đóng phụ đề chuẩn khớp vào video...")
+            st.info("Đang tiến hành ghép phụ đề vào video bằng FFmpeg...")
             
             cmd_merge = f'ffmpeg -i "{st.session_state.temp_video_path}" -vf "subtitles=\'{srt_filename}\'" -c:a copy "{output_video_file}" -y'
             subprocess.run(cmd_merge, shell=True, check=True)
 
-            st.success("🎉 Hoàn tất đóng phụ đề vào video!")
+            st.success("🎉 Hoàn tất ghép phụ đề vào video!")
 
             col1, col2 = st.columns(2)
             with col1:
                 with open(srt_filename, "rb") as file_srt:
                     st.download_button(
-                        label="📝 Tải file phụ đề (.srt)",
+                        label="📝 Tải file phụ đề song ngữ (.srt)",
                         data=file_srt,
-                        file_name="vietsub_chuan.srt",
+                        file_name="vietsub_songngu.srt",
                         mime="text/plain"
                     )
             with col2:
                 with open(output_video_file, "rb") as file_vid:
                     st.download_button(
-                        label="🎬 Tải Video Vietsub hoàn chỉnh (.mp4)",
+                        label="🎬 Tải Video gắn phụ đề hoàn chỉnh (.mp4)",
                         data=file_vid,
-                        file_name="video_vietsub_chuan.mp4",
+                        file_name="video_vietsub_hoanchinh.mp4",
                         mime="video/mp4"
                     )
 
