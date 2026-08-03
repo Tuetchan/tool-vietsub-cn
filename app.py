@@ -48,13 +48,13 @@ def extract_clean_url(text):
 # Hàm tự động lọc bỏ chữ tiếng Trung, chỉ giữ lại tiếng Việt khi đóng dấu vào video
 def filter_only_vietnamese_srt(srt_text):
     cleaned_blocks = []
-    blocks = srt_text.strip().split("\n\n")
+    blocks = re.split(r'\n\s*\n', srt_text.strip())
     for block in blocks:
         lines = block.strip().split("\n")
         if len(lines) >= 3:
             header = lines[:2]  # Số thứ tự & mốc thời gian
             content_lines = lines[2:]
-            # Lọc bỏ các dòng có chứa chữ Hán (tiếng Trung)
+            # Lọc bỏ các dòng chứa chữ Hán tiếng Trung (\u4e00-\u9fff)
             vi_lines = [l for l in content_lines if not re.search(r'[\u4e00-\u9fff]', l)]
             if vi_lines:
                 cleaned_blocks.append("\n".join(header + vi_lines))
@@ -65,7 +65,7 @@ def filter_only_vietnamese_srt(srt_text):
     return "\n\n".join(cleaned_blocks)
 
 # ==========================================
-# BƯỚC 1: TRÍCH XUẤT PHỤ ĐỀ (CÓ TIẾNG TRUNG ĐỂ KIỂM TRA)
+# BƯỚC 1: TRÍCH XUẤT PHỤ ĐỀ (MODEL GEMINI-3.5-FLASH)
 # ==========================================
 st.subheader("Bước 1: Trích xuất & Dịch phụ đề")
 
@@ -79,6 +79,8 @@ if st.button("🚀 Bắt đầu phân tích Video & Dịch"):
     else:
         try:
             genai.configure(api_key=api_key)
+            
+            # Khai báo model gemini-3.5-flash theo yêu cầu
             model = genai.GenerativeModel('gemini-3.5-flash')
 
             temp_video_path = "temp_video.mp4"
@@ -131,7 +133,7 @@ if st.button("🚀 Bắt đầu phân tích Video & Dịch"):
             st.error(f"Đã xảy ra lỗi: {e}")
 
 # ==========================================
-# BƯỚC 2: KIỂM TRA (TRUNG - VIỆT) -> LỌC CHỈ LẤY TIẾNG VIỆT ĐỂ GHÉP
+# BƯỚC 2: KIỂM TRA (TRUNG - VIỆT) -> LỌC & GHÉP VÀO VIDEO
 # ==========================================
 if st.session_state.srt_content:
     st.divider()
@@ -149,7 +151,7 @@ if st.session_state.srt_content:
             srt_filename = "phu_de_vietsub.srt"
             output_video_file = "video_vietsub_output.mp4"
 
-            # TỰ ĐỘNG LỌC CHỈ GIỮ LAỊ TIẾNG VIỆT
+            # 1. Tự động lọc chỉ giữ lại tiếng Việt
             vi_only_srt = filter_only_vietnamese_srt(edited_srt)
 
             with open(srt_filename, "w", encoding="utf-8") as f:
@@ -157,15 +159,27 @@ if st.session_state.srt_content:
 
             st.info("Đang tiến hành ghép Vietsub tiếng Việt vào video...")
             
-            # Cấu hình kiểu chữ & Khung nền che chữ cũ
-            if cover_original:
-                # BorderStyle=3 tạo ô dải nền đen mờ che đè lên chữ Trung cũ ở đằng sau
-                style_cmd = "force_style='FontName=Arial,FontSize=16,PrimaryColour=&H00FFFFFF,BorderStyle=3,BackColour=&H90000000,MarginV=20'"
-            else:
-                style_cmd = "force_style='FontName=Arial,FontSize=16,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2,MarginV=20'"
+            # 2. Xử lý đường dẫn chống lỗi ký tự trên Windows
+            input_video_path = os.path.abspath(st.session_state.temp_video_path).replace("\\", "/")
+            srt_path_clean = os.path.abspath(srt_filename).replace("\\", "/").replace(":", "\\:")
+            output_video_path = os.path.abspath(output_video_file).replace("\\", "/")
 
-            cmd_merge = f'ffmpeg -i "{st.session_state.temp_video_path}" -vf "subtitles=\'{srt_filename}\':{style_cmd}" -c:a copy "{output_video_file}" -y'
-            subprocess.run(cmd_merge, shell=True, check=True)
+            if cover_original:
+                style_str = "FontName=Arial,FontSize=16,PrimaryColour=&H00FFFFFF,BorderStyle=3,BackColour=&H90000000,MarginV=20"
+            else:
+                style_str = "FontName=Arial,FontSize=16,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2,MarginV=20"
+
+            # 3. Lệnh FFmpeg dạng danh sách mảng (Tránh lỗi exit status 183 trên Windows)
+            cmd = [
+                "ffmpeg",
+                "-y",
+                "-i", input_video_path,
+                "-vf", f"subtitles='{srt_path_clean}':force_style='{style_str}'",
+                "-c:a", "copy",
+                output_video_path
+            ]
+
+            subprocess.run(cmd, check=True)
 
             st.success("🎉 Hoàn tất ghép Vietsub sạch đẹp vào video!")
 
