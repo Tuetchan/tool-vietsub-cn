@@ -48,7 +48,7 @@ if st.button("Bắt đầu xử lý"):
     else:
         try:
             genai.configure(api_key=api_key)
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            model = genai.GenerativeModel('gemini-3.5-flash')
 
             mp3_file = "temp_audio.mp3"
             output_video_file = "video_vietsub_output.mp4"
