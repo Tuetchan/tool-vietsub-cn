@@ -4,7 +4,7 @@ import os
 import google.generativeai as genai
 import time
 import re
-from moviepy.editor import VideoFileClip
+import subprocess
 
 st.set_page_config(page_title="Auto Vietsub Tool", page_icon="🎬")
 st.title("🎬 Tool Auto Vietsub Phim Trung Quốc bằng Gemini")
@@ -51,6 +51,7 @@ if st.button("Bắt đầu xử lý"):
             model = genai.GenerativeModel('gemini-3.5-flash')
 
             mp3_file = "temp_audio.mp3"
+            cleanup_files(mp3_file) # Dọn dẹp nếu có file cũ
 
             # TRƯỜNG HỢP 1: Tải video trực tiếp từ thiết bị
             if option == "Tải tệp video từ máy (MP4, MOV,...)":
@@ -62,10 +63,10 @@ if st.button("Bắt đầu xử lý"):
                 with open(temp_video_path, "wb") as f:
                     f.write(uploaded_file.getbuffer())
 
-                st.info("Đang tách âm thanh từ tệp video...")
-                video_clip = VideoFileClip(temp_video_path)
-                video_clip.audio.write_audiofile(mp3_file, verbose=False, logger=None)
-                video_clip.close()
+                st.info("Đang tách âm thanh bằng FFmpeg...")
+                # Gọi trực tiếp lệnh FFmpeg của hệ thống để trích xuất âm thanh
+                cmd = f'ffmpeg -i "{temp_video_path}" -vn -ar 44100 -ac 2 -b:a 192k "{mp3_file}" -y'
+                subprocess.run(cmd, shell=True, check=True)
                 
                 cleanup_files(temp_video_path)
 
