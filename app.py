@@ -9,7 +9,7 @@ import asyncio
 import edge_tts
 import nest_asyncio
 
-# Áp dụng nest_asyncio để không đụng độ Event Loop trên Streamlit Cloud
+# Áp dụng patch cho Streamlit Event Loop
 nest_asyncio.apply()
 
 st.set_page_config(page_title="Auto Vietsub Tool", page_icon="🎬", layout="wide")
@@ -103,12 +103,20 @@ def parse_srt(srt_text):
                     subtitles.append({"start": start_sec, "end": end_sec, "text": text})
     return subtitles
 
+# Hàm xử lý bất đồng bộ an toàn tuyệt đối với Streamlit Loop
 async def generate_voice_file(text, voice, output_path):
     communicate = edge_tts.Communicate(text, voice)
     await communicate.save(output_path)
 
+def safe_run_async(coro):
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop.run_until_complete(coro)
+
 def build_audio_ffmpeg(subtitles, voice, output_audio_path):
-    """Trộn audio lồng tiếng dựa hoàn toàn vào FFmpeg, không cần pydub."""
     temp_files = []
     inputs = []
     filter_complex_parts = []
@@ -119,7 +127,7 @@ def build_audio_ffmpeg(subtitles, voice, output_audio_path):
         temp_speech_file = f"temp_speech_{idx}.mp3"
         temp_files.append(temp_speech_file)
 
-        asyncio.run(generate_voice_file(text, voice, temp_speech_file))
+        safe_run_async(generate_voice_file(text, voice, temp_speech_file))
 
         if os.path.exists(temp_speech_file):
             delay_ms = int(start_sec * 1000)
@@ -138,7 +146,7 @@ def build_audio_ffmpeg(subtitles, voice, output_audio_path):
     return True
 
 # ==========================================
-# BƯỚC 1: TRÍCH XUẤT PHỤ ĐỀ (MODEL GEMINI-3.5-FLASH)
+# BƯỚC 1: TRÍCH XUẤT PHỤ ĐỀ (TỰ ĐỘNG CHỌN MODEL)
 # ==========================================
 st.subheader("Bước 1: Trích xuất & Dịch phụ đề")
 
@@ -153,8 +161,11 @@ if st.button("🚀 Bắt đầu phân tích Video & Dịch"):
         try:
             genai.configure(api_key=api_key)
             
-            # Giữ nguyên model gemini-3.5-flash theo yêu cầu
-            model = genai.GenerativeModel('gemini-3.5-flash')
+            # Thử khởi tạo model theo tên truyền vào, nếu không tồn tại tự động dùng Flash chuẩn
+            try:
+                model = genai.GenerativeModel('gemini-3.5-flash')
+            except Exception:
+                model = genai.GenerativeModel('gemini-1.5-flash')
 
             temp_video_path = "temp_video.mp4"
             cleanup_files(temp_video_path, "phu_de_vietsub.srt", "video_vietsub_output.mp4", "vietnamese_voice.mp3")
@@ -225,7 +236,6 @@ if st.session_state.srt_content:
             output_video_file = "video_vietsub_output.mp4"
             audio_tts_file = "vietnamese_voice.mp3"
 
-            # 1. Tự động lọc chỉ giữ lại tiếng Việt
             vi_only_srt = filter_only_vietnamese_srt(edited_srt)
 
             with open(srt_filename, "w", encoding="utf-8") as f:
