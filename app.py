@@ -24,12 +24,8 @@ if "srt_content" not in st.session_state:
 if "temp_video_path" not in st.session_state:
     st.session_state.temp_video_path = ""
 
-# Tùy chọn che chữ Trung gốc & Lồng tiếng
-col1, col2 = st.columns(2)
-with col1:
-    cover_original = st.checkbox("Tự động tạo khung nền đen che lên chữ Trung Quốc gốc ở dưới video", value=True)
-with col2:
-    enable_tts = st.checkbox("Bật Lồng tiếng Tiếng Việt (TTS)", value=True)
+# Tùy chọn che chữ Trung gốc
+cover_original = st.checkbox("Tự động tạo khung nền đen che lên chữ Trung Quốc gốc ở dưới video", value=True)
 
 voice_option = st.selectbox(
     "Chọn giọng đọc Lồng tiếng AI:",
@@ -163,12 +159,12 @@ if st.button("🚀 Bắt đầu phân tích Video & Dịch"):
             
             # Thử khởi tạo model theo tên truyền vào, nếu không tồn tại tự động dùng Flash chuẩn
             try:
-                model = genai.GenerativeModel('gemini-3.5-flash')
+                model = genai.GenerativeModel('gemini-1.5-flash') # Chỉnh lại thành 1.5 vì 3.5 chưa ra mắt
             except Exception:
                 model = genai.GenerativeModel('gemini-1.5-flash')
 
             temp_video_path = "temp_video.mp4"
-            cleanup_files(temp_video_path, "phu_de_vietsub.srt", "video_vietsub_output.mp4", "vietnamese_voice.mp3")
+            cleanup_files(temp_video_path, "phu_de_vietsub.srt", "video_vietsub_only.mp4", "video_vietsub_tts.mp4", "vietnamese_voice.mp3")
 
             if option == "Tải tệp video từ máy (MP4, MOV,...)":
                 file_ext = uploaded_file.name.split('.')[-1]
@@ -198,7 +194,7 @@ if st.button("🚀 Bắt đầu phân tích Video & Dịch"):
             prompt = """
             Bạn là chuyên gia làm phụ đề phim.
             Hãy nghe giọng nói và nhìn chữ trên màn hình video để tạo phụ đề.
-            YÊU CẦU BẮT BỘC:
+            YÊU CẦU BẮT BUỘC:
             1. Căn thời gian chính xác theo nhịp thoại của nhân vật.
             2. Mỗi ô phụ đề gồm 2 dòng:
                Dòng 1: Tiếng Trung gốc (để kiểm tra)
@@ -217,12 +213,12 @@ if st.button("🚀 Bắt đầu phân tích Video & Dịch"):
             st.error(f"Đã xảy ra lỗi: {e}")
 
 # ==========================================
-# BƯỚC 2: KIỂM TRA -> TẠO LỒNG TIẾNG & GHÉP VIDEO
+# BƯỚC 2: KIỂM TRA -> TẠO 2 BẢN VIDEO
 # ==========================================
 if st.session_state.srt_content:
     st.divider()
     st.subheader("Bước 2: Đối chiếu Tiếng Trung gốc & Sửa bản dịch Tiếng Việt")
-    st.info("💡 Ô bên dưới hiển thị cả chữ Trung gốc để bạn đối chiếu. Khi bấm nút ghép video, ứng dụng sẽ TỰ ĐỘNG XÓA tiếng Trung, tạo giọng đọc lồng tiếng Việt và ghép đè vào video!")
+    st.info("💡 Ô bên dưới hiển thị cả chữ Trung gốc để bạn đối chiếu. Hệ thống sẽ XÓA tiếng Trung và tự động xuất ra 2 bản video: Bản chỉ có Vietsub và Bản có cả Vietsub + Lồng Tiếng!")
     
     edited_srt = st.text_area(
         label="Nội dung phụ đề (Bạn có thể xem chữ Trung gốc và chỉnh sửa câu tiếng Việt):",
@@ -230,10 +226,11 @@ if st.session_state.srt_content:
         height=380
     )
 
-    if st.button("🎬 Xác nhận & Ghép Lồng Tiếng vào Video"):
+    if st.button("🎬 Xác nhận & Xuất 2 bản Video"):
         try:
             srt_filename = "phu_de_vietsub.srt"
-            output_video_file = "video_vietsub_output.mp4"
+            output_video_sub_only = "video_vietsub_only.mp4"
+            output_video_sub_tts = "video_vietsub_tts.mp4"
             audio_tts_file = "vietnamese_voice.mp3"
 
             vi_only_srt = filter_only_vietnamese_srt(edited_srt)
@@ -243,71 +240,82 @@ if st.session_state.srt_content:
 
             input_video_path = os.path.abspath(st.session_state.temp_video_path).replace("\\", "/")
             srt_path_clean = os.path.abspath(srt_filename).replace("\\", "/").replace(":", "\\:")
-            output_video_path = os.path.abspath(output_video_file).replace("\\", "/")
-
+            
             if cover_original:
                 style_str = "FontName=Arial,FontSize=16,PrimaryColour=&H00FFFFFF,BorderStyle=3,BackColour=&H90000000,MarginV=20"
             else:
                 style_str = "FontName=Arial,FontSize=16,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2,MarginV=20"
 
-            if enable_tts:
-                st.info("🎙️ Đang tạo giọng đọc AI Lồng Tiếng Việt bằng FFmpeg...")
-                subtitles = parse_srt(edited_srt)
-                has_audio = build_audio_ffmpeg(subtitles, selected_voice, audio_tts_file)
+            # 1. TẠO VIDEO CHỈ CÓ VIETSUB (GIỮ NGUYÊN ÂM THANH GỐC)
+            st.info("⏳ Đang tạo Video chỉ có Vietsub...")
+            cmd_sub_only = [
+                "ffmpeg", "-y",
+                "-i", input_video_path,
+                "-vf", f"subtitles='{srt_path_clean}':force_style='{style_str}'",
+                "-c:a", "copy",
+                output_video_sub_only
+            ]
+            subprocess.run(cmd_sub_only, check=True)
+            st.success("✅ Đã xong bản Video chỉ có Vietsub!")
 
-                if has_audio and os.path.exists(audio_tts_file):
-                    audio_tts_path = os.path.abspath(audio_tts_file).replace("\\", "/")
-                    st.info("🎬 Đang trộn âm thanh và xuất video...")
-                    cmd = [
-                        "ffmpeg", "-y",
-                        "-i", input_video_path,
-                        "-i", audio_tts_path,
-                        "-filter_complex",
-                        f"[0:a]volume=0.15[bg];[bg][1:a]amix=inputs=2:duration=first[outa];[0:v]subtitles='{srt_path_clean}':force_style='{style_str}'[outv]",
-                        "-map", "[outv]",
-                        "-map", "[outa]",
-                        "-c:v", "libx264",
-                        "-c:a", "aac",
-                        output_video_path
-                    ]
-                else:
-                    cmd = [
-                        "ffmpeg", "-y",
-                        "-i", input_video_path,
-                        "-vf", f"subtitles='{srt_path_clean}':force_style='{style_str}'",
-                        "-c:a", "copy",
-                        output_video_path
-                    ]
-            else:
-                st.info("Đang tiến hành ghép Vietsub tiếng Việt vào video...")
-                cmd = [
+            # 2. TẠO VIDEO CÓ VIETSUB + LỒNG TIẾNG AI
+            st.info("🎙️ Đang tạo giọng đọc AI Lồng Tiếng Việt bằng FFmpeg...")
+            subtitles = parse_srt(edited_srt)
+            has_audio = build_audio_ffmpeg(subtitles, selected_voice, audio_tts_file)
+
+            if has_audio and os.path.exists(audio_tts_file):
+                audio_tts_path = os.path.abspath(audio_tts_file).replace("\\", "/")
+                st.info("🎬 Đang trộn âm thanh và xuất Video có Lồng tiếng...")
+                cmd_sub_tts = [
                     "ffmpeg", "-y",
                     "-i", input_video_path,
-                    "-vf", f"subtitles='{srt_path_clean}':force_style='{style_str}'",
-                    "-c:a", "copy",
-                    output_video_path
+                    "-i", audio_tts_path,
+                    "-filter_complex",
+                    f"[0:a]volume=0.15[bg];[bg][1:a]amix=inputs=2:duration=first[outa];[0:v]subtitles='{srt_path_clean}':force_style='{style_str}'[outv]",
+                    "-map", "[outv]",
+                    "-map", "[outa]",
+                    "-c:v", "libx264",
+                    "-c:a", "aac",
+                    output_video_sub_tts
                 ]
+                subprocess.run(cmd_sub_tts, check=True)
+                st.success("✅ Đã xong bản Video có Vietsub + Lồng Tiếng!")
+            else:
+                st.warning("Không tạo được âm thanh lồng tiếng, bỏ qua bản có lồng tiếng.")
 
-            subprocess.run(cmd, check=True)
-            st.success("🎉 Hoàn tất ghép Vietsub & Lồng Tiếng Việt vào video!")
+            st.success("🎉 HOÀN TẤT! Vui lòng tải các file của bạn bên dưới:")
 
-            col_a, col_b = st.columns(2)
-            with col_a:
+            # HIỂN THỊ NÚT TẢI XUỐNG
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
                 with open(srt_filename, "rb") as file_srt:
                     st.download_button(
-                        label="📝 Tải file phụ đề Vietsub (.srt)",
+                        label="📝 Tải Phụ đề (.srt)",
                         data=file_srt,
                         file_name="vietsub.srt",
                         mime="text/plain"
                     )
-            with col_b:
-                with open(output_video_file, "rb") as file_vid:
-                    st.download_button(
-                        label="🎬 Tải Video Lồng Tiếng hoàn chỉnh (.mp4)",
-                        data=file_vid,
-                        file_name="video_longtieng_hoanchinh.mp4",
-                        mime="video/mp4"
-                    )
+                    
+            with col2:
+                if os.path.exists(output_video_sub_only):
+                    with open(output_video_sub_only, "rb") as file_vid_1:
+                        st.download_button(
+                            label="🎬 Tải Video CHỈ Vietsub",
+                            data=file_vid_1,
+                            file_name="video_vietsub_only.mp4",
+                            mime="video/mp4"
+                        )
+                        
+            with col3:
+                if os.path.exists(output_video_sub_tts):
+                    with open(output_video_sub_tts, "rb") as file_vid_2:
+                        st.download_button(
+                            label="🎙️ Tải Video CÓ Lồng Tiếng",
+                            data=file_vid_2,
+                            file_name="video_vietsub_longtieng.mp4",
+                            mime="video/mp4"
+                        )
 
         except Exception as e:
             st.error(f"Lỗi khi xử lý video: {e}")
