@@ -104,6 +104,53 @@ def parse_srt(srt_text):
                     subtitles.append({"start": start_sec, "end": end_sec, "text": text})
     return subtitles
 
+def convert_srt_time_to_ass(srt_time_str):
+    srt_time_str = srt_time_str.replace(',', '.')
+    parts = srt_time_str.split(':')
+    h = int(parts[0])
+    m = int(parts[1])
+    s_parts = parts[2].split('.')
+    s = int(s_parts[0])
+    cs = int(s_parts[1][:2]) if len(s_parts) > 1 else 0
+    return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
+
+# Hàm tự động tạo file .ass định dạng đẹp & an toàn tuyệt đối với FFmpeg
+def create_ass_file(srt_text, ass_filename, cover_original=True):
+    vi_srt = filter_only_vietnamese_srt(srt_text)
+    blocks = re.split(r'\n\s*\n', vi_srt.strip())
+    
+    border_style = "3" if cover_original else "1"
+    back_color = "&H80000000" if cover_original else "&H00000000"
+    outline = "0" if cover_original else "2"
+
+    header = f"""[Script Info]
+ScriptType: v4.00+
+PlayResX: 1280
+PlayResY: 720
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Arial,22,&H00FFFFFF,&H00000000,&H00000000,{back_color},0,0,0,0,100,100,0,0,{border_style},{outline},0,2,10,10,25,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"""
+    dialogues = []
+    for block in blocks:
+        lines = block.strip().split("\n")
+        if len(lines) >= 3:
+            time_match = re.match(r'(\d{2}:\d{2}:\d{2}[,\.]\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}[,\.]\d{3})', lines[1])
+            if time_match:
+                start_ass = convert_srt_time_to_ass(time_match.group(1))
+                end_ass = convert_srt_time_to_ass(time_match.group(2))
+                text_lines = [l for l in lines[2:] if not re.search(r'[\u4e00-\u9fff]', l)]
+                text = r"\N".join(text_lines).strip()
+                if text:
+                    dialogues.append(f"Dialogue: 0,{start_ass},{end_ass},Default,,0,0,0,,{text}")
+    
+    with open(ass_filename, "w", encoding="utf-8") as f:
+        f.write(header + "\n".join(dialogues))
+
 def generate_single_tts(sub_item):
     idx, sub, voice = sub_item
     text = sub['text']
@@ -169,7 +216,7 @@ if st.button("🚀 Bắt đầu phân tích Video & Dịch"):
             temp_video_path = "temp_video.mp4"
             temp_audio_path = "temp_audio_for_ai.mp3"
             
-            cleanup_files(temp_video_path, temp_audio_path, "phu_de_vietsub.srt", "video_hoanchinh.mp4", "vietnamese_voice.mp3")
+            cleanup_files(temp_video_path, temp_audio_path, "phu_de_vietsub.srt", "phu_de_vietsub.ass", "video_hoanchinh.mp4", "vietnamese_voice.mp3")
 
             if option == "Tải tệp video từ máy (MP4, MOV,...)":
                 file_ext = uploaded_file.name.split('.')[-1]
@@ -239,19 +286,19 @@ if st.session_state.srt_content:
     if st.button("🎬 Xác nhận & Xuất Video Hoàn Chỉnh"):
         try:
             srt_filename = "phu_de_vietsub.srt"
+            ass_filename = "phu_de_vietsub.ass"
             output_video_file = "video_hoanchinh.mp4"
             audio_tts_file = "vietnamese_voice.mp3"
 
+            # Lưu file SRT cho người dùng tải về
             vi_only_srt = filter_only_vietnamese_srt(edited_srt)
             with open(srt_filename, "w", encoding="utf-8") as f:
                 f.write(vi_only_srt)
 
-            input_video_path = st.session_state.temp_video_path
+            # Tạo file ASS chuẩn cho FFmpeg xử lý
+            create_ass_file(edited_srt, ass_filename, cover_original=cover_original)
 
-            if cover_original:
-                style_str = "FontName=Arial,FontSize=16,PrimaryColour=&H00FFFFFF,BorderStyle=3,BackColour=&H90000000,MarginV=20"
-            else:
-                style_str = "FontName=Arial,FontSize=16,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2,MarginV=20"
+            input_video_path = st.session_state.temp_video_path
 
             st.info("🎙️ Đang tạo giọng đọc AI lồng tiếng...")
             subtitles = parse_srt(edited_srt)
@@ -260,13 +307,13 @@ if st.session_state.srt_content:
             st.info("🎬 Đang ghép Phụ đề & Âm thanh vào Video...")
             
             if has_audio and os.path.exists(audio_tts_file):
-                # Thử ghép trộn âm thanh gốc (nhỏ 15%) + lồng tiếng
+                # Trộn âm thanh gốc (nhỏ 15%) + âm thanh lồng tiếng
                 cmd_mix = [
                     "ffmpeg", "-y",
                     "-i", input_video_path,
                     "-i", audio_tts_file,
                     "-filter_complex",
-                    f"[0:a]volume=0.15[bg];[bg][1:a]amix=inputs=2:duration=first[outa];[0:v]subtitles={srt_filename}:force_style='{style_str}'[outv]",
+                    f"[0:a]volume=0.15[bg];[bg][1:a]amix=inputs=2:duration=first[outa];[0:v]subtitles={ass_filename}[outv]",
                     "-map", "[outv]",
                     "-map", "[outa]",
                     "-c:v", "libx264",
@@ -277,12 +324,12 @@ if st.session_state.srt_content:
                 try:
                     subprocess.run(cmd_mix, check=True, capture_output=True, text=True)
                 except subprocess.CalledProcessError:
-                    # Nếu video gốc không có luồng audio làm amix thất bại -> Fallback thay hẳn audio bằng TTS
+                    # Nếu video gốc không có tiếng, thay thế hẳn âm thanh bằng tiếng lồng tiếng
                     cmd_replace_audio = [
                         "ffmpeg", "-y",
                         "-i", input_video_path,
                         "-i", audio_tts_file,
-                        "-filter_complex", f"[0:v]subtitles={srt_filename}:force_style='{style_str}'[outv]",
+                        "-filter_complex", f"[0:v]subtitles={ass_filename}[outv]",
                         "-map", "[outv]",
                         "-map", "1:a",
                         "-c:v", "libx264",
@@ -294,7 +341,7 @@ if st.session_state.srt_content:
                 cmd_no_audio = [
                     "ffmpeg", "-y",
                     "-i", input_video_path,
-                    "-vf", f"subtitles={srt_filename}:force_style='{style_str}'",
+                    "-vf", f"subtitles={ass_filename}",
                     "-c:a", "copy",
                     output_video_file
                 ]
@@ -322,6 +369,8 @@ if st.session_state.srt_content:
                         )
 
         except subprocess.CalledProcessError as e:
-            st.error(f"Lỗi FFmpeg chi tiết: {e.stderr if e.stderr else e}")
+            err_text = e.stderr if isinstance(e.stderr, str) else e.stderr.decode('utf-8', errors='ignore')
+            last_lines = "\n".join(err_text.strip().splitlines()[-10:])
+            st.error(f"Lỗi FFmpeg: {last_lines}")
         except Exception as e:
             st.error(f"Lỗi khi xử lý video: {e}")
