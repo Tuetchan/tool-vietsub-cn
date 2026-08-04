@@ -7,10 +7,9 @@ import re
 import subprocess
 import asyncio
 import edge_tts
-from pydub import AudioSegment
 import nest_asyncio
 
-# Áp dụng patch cho Streamlit Cloud để không bị lỗi Event Loop
+# Áp dụng nest_asyncio để không đụng độ Event Loop trên Streamlit Cloud
 nest_asyncio.apply()
 
 st.set_page_config(page_title="Auto Vietsub Tool", page_icon="🎬", layout="wide")
@@ -80,13 +79,13 @@ def filter_only_vietnamese_srt(srt_text):
             cleaned_blocks.append(block)
     return "\n\n".join(cleaned_blocks)
 
-def time_to_ms(time_str):
+def time_to_seconds(time_str):
     time_str = time_str.replace(',', '.')
     parts = time_str.split(':')
     hours = float(parts[0])
     minutes = float(parts[1])
     seconds = float(parts[2])
-    return int((hours * 3600 + minutes * 60 + seconds) * 1000)
+    return hours * 3600 + minutes * 60 + seconds
 
 def parse_srt(srt_text):
     blocks = re.split(r'\n\s*\n', srt_text.strip())
@@ -96,47 +95,47 @@ def parse_srt(srt_text):
         if len(lines) >= 3:
             time_match = re.match(r'(\d{2}:\d{2}:\d{2}[,\.]\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}[,\.]\d{3})', lines[1])
             if time_match:
-                start_ms = time_to_ms(time_match.group(1))
-                end_ms = time_to_ms(time_match.group(2))
+                start_sec = time_to_seconds(time_match.group(1))
+                end_sec = time_to_seconds(time_match.group(2))
                 text_lines = [l for l in lines[2:] if not re.search(r'[\u4e00-\u9fff]', l)]
                 text = " ".join(text_lines).strip()
                 if text:
-                    subtitles.append({"start": start_ms, "end": end_ms, "text": text})
+                    subtitles.append({"start": start_sec, "end": end_sec, "text": text})
     return subtitles
 
 async def generate_voice_file(text, voice, output_path):
     communicate = edge_tts.Communicate(text, voice)
     await communicate.save(output_path)
 
-def create_full_audio_track(subtitles, total_duration_ms, voice):
-    audio_track = AudioSegment.silent(duration=total_duration_ms)
+def build_audio_ffmpeg(subtitles, voice, output_audio_path):
+    """Trộn audio lồng tiếng dựa hoàn toàn vào FFmpeg, không cần pydub."""
     temp_files = []
-
+    inputs = []
+    filter_complex_parts = []
+    
     for idx, sub in enumerate(subtitles):
         text = sub['text']
-        start_ms = sub['start']
-        duration_ms = sub['end'] - sub['start']
-
-        if not text:
-            continue
-
+        start_sec = sub['start']
         temp_speech_file = f"temp_speech_{idx}.mp3"
         temp_files.append(temp_speech_file)
 
-        # Chạy bất đồng bộ an toàn
         asyncio.run(generate_voice_file(text, voice, temp_speech_file))
 
         if os.path.exists(temp_speech_file):
-            speech = AudioSegment.from_file(temp_speech_file)
-            if len(speech) > duration_ms and duration_ms > 0:
-                speed_factor = len(speech) / duration_ms
-                speed_factor = min(speed_factor, 1.4)
-                speech = speech.speedup(playback_speed=speed_factor)
+            delay_ms = int(start_sec * 1000)
+            inputs.extend(["-i", temp_speech_file])
+            filter_complex_parts.append(f"[{idx}:a]adelay={delay_ms}|{delay_ms}[a{idx}]")
 
-            audio_track = audio_track.overlay(speech, position=start_ms)
+    if not filter_complex_parts:
+        return False
 
+    mix_inputs = "".join([f"[a{i}]" for i in range(len(filter_complex_parts))])
+    filter_complex_str = ";".join(filter_complex_parts) + f";{mix_inputs}amix=inputs={len(filter_complex_parts)}:dropout_transition=0[outa]"
+
+    cmd = ["ffmpeg", "-y"] + inputs + ["-filter_complex", filter_complex_str, "-map", "[outa]", output_audio_path]
+    subprocess.run(cmd, check=True)
     cleanup_files(*temp_files)
-    return audio_track
+    return True
 
 # ==========================================
 # BƯỚC 1: TRÍCH XUẤT PHỤ ĐỀ (MODEL GEMINI-3.5-FLASH)
@@ -154,7 +153,7 @@ if st.button("🚀 Bắt đầu phân tích Video & Dịch"):
         try:
             genai.configure(api_key=api_key)
             
-            # Khai báo giữ nguyên model gemini-3.5-flash theo đúng yêu cầu
+            # Giữ nguyên model gemini-3.5-flash theo yêu cầu
             model = genai.GenerativeModel('gemini-3.5-flash')
 
             temp_video_path = "temp_video.mp4"
@@ -242,36 +241,37 @@ if st.session_state.srt_content:
                 style_str = "FontName=Arial,FontSize=16,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2,MarginV=20"
 
             if enable_tts:
-                st.info("🎙️ Đang tạo giọng đọc AI Lồng Tiếng Việt theo timeline...")
+                st.info("🎙️ Đang tạo giọng đọc AI Lồng Tiếng Việt bằng FFmpeg...")
                 subtitles = parse_srt(edited_srt)
+                has_audio = build_audio_ffmpeg(subtitles, selected_voice, audio_tts_file)
 
-                probe_cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", input_video_path]
-                duration_sec = float(subprocess.check_output(probe_cmd).decode('utf-8').strip())
-                total_duration_ms = int(duration_sec * 1000)
-
-                full_audio = create_full_audio_track(subtitles, total_duration_ms, selected_voice)
-                full_audio.export(audio_tts_file, format="mp3")
-                
-                audio_tts_path = os.path.abspath(audio_tts_file).replace("\\", "/")
-
-                st.info("🎬 Đang trộn giọng lồng tiếng, vietsub và xuất video...")
-                cmd = [
-                    "ffmpeg", "-y",
-                    "-i", input_video_path,
-                    "-i", audio_tts_path,
-                    "-filter_complex",
-                    f"[0:a]volume=0.15[bg_audio];[bg_audio][1:a]amix=inputs=2:duration=first[out_audio];[0:v]subtitles='{srt_path_clean}':force_style='{style_str}'[out_video]",
-                    "-map", "[out_video]",
-                    "-map", "[out_audio]",
-                    "-c:v", "libx264",
-                    "-c:a", "aac",
-                    output_video_path
-                ]
+                if has_audio and os.path.exists(audio_tts_file):
+                    audio_tts_path = os.path.abspath(audio_tts_file).replace("\\", "/")
+                    st.info("🎬 Đang trộn âm thanh và xuất video...")
+                    cmd = [
+                        "ffmpeg", "-y",
+                        "-i", input_video_path,
+                        "-i", audio_tts_path,
+                        "-filter_complex",
+                        f"[0:a]volume=0.15[bg];[bg][1:a]amix=inputs=2:duration=first[outa];[0:v]subtitles='{srt_path_clean}':force_style='{style_str}'[outv]",
+                        "-map", "[outv]",
+                        "-map", "[outa]",
+                        "-c:v", "libx264",
+                        "-c:a", "aac",
+                        output_video_path
+                    ]
+                else:
+                    cmd = [
+                        "ffmpeg", "-y",
+                        "-i", input_video_path,
+                        "-vf", f"subtitles='{srt_path_clean}':force_style='{style_str}'",
+                        "-c:a", "copy",
+                        output_video_path
+                    ]
             else:
                 st.info("Đang tiến hành ghép Vietsub tiếng Việt vào video...")
                 cmd = [
-                    "ffmpeg",
-                    "-y",
+                    "ffmpeg", "-y",
                     "-i", input_video_path,
                     "-vf", f"subtitles='{srt_path_clean}':force_style='{style_str}'",
                     "-c:a", "copy",
