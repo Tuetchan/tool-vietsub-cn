@@ -9,8 +9,8 @@ import requests
 from concurrent.futures import ThreadPoolExecutor
 
 st.set_page_config(page_title="Auto Vietsub Tool", page_icon="🎬", layout="wide")
-st.title("🎬 Tool Auto Vietsub & Lồng Tiếng Việt bằng AI")
-st.write("Tự động trích xuất âm thanh -> Dịch thuật bằng Gemini -> Lồng tiếng song song & Xuất video hoàn chỉnh")
+st.title("🎬 Tool Auto Vietsub & Lồng Tiếng Việt bằng AI (Nhìn Phụ Đề Màn Hình)")
+st.write("Đọc phụ đề gốc trên màn hình video -> Dịch thuật bằng Gemini Vision -> Lồng tiếng song song & Xuất video hoàn chỉnh")
 
 # 1. Cấu hình AI Dịch thuật
 st.subheader("🔑 1. Cấu hình AI Dịch thuật")
@@ -98,10 +98,6 @@ def extract_clean_url(text):
     if url_match:
         return url_match.group(0)
     return text.strip()
-
-def extract_audio_from_video(input_video_path, output_audio_path):
-    cmd = ["ffmpeg", "-y", "-i", input_video_path, "-vn", "-acodec", "libmp3lame", "-q:a", "4", output_audio_path]
-    subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 def filter_only_vietnamese_srt(srt_text):
     cleaned_blocks = []
@@ -201,12 +197,11 @@ def get_audio_duration(file_path):
 
 # --- HÀM TỰ ĐỘNG TĂNG TỐC ĐỘ ÂM THANH NẾU BỊ DÀI HƠN KHUNG THỜI GIAN GỐC ---
 def adjust_audio_speed(input_file, speed_factor):
-    if speed_factor <= 1.03:  # Bỏ qua nếu chênh lệch không đáng kể (dưới 3%)
+    if speed_factor <= 1.03:
         return
     
     temp_out = input_file + "_speed.mp3"
     try:
-        # Tách chuỗi filter atempo nếu hệ số > 2.0 (FFmpeg atempo hỗ trợ từ 0.5 đến 2.0)
         factors = []
         f = speed_factor
         while f > 2.0:
@@ -256,10 +251,9 @@ def generate_single_tts(sub_item):
                 subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
             if os.path.exists(temp_speech_file) and os.path.getsize(temp_speech_file) > 0:
-                # TỰ ĐỘNG KIỂM TRA VÀ TĂNG TỐC ĐỘ NÓI KHỐP VỚI KHUNG THỜI GIAN VIDEO GỐC
                 actual_duration = get_audio_duration(temp_speech_file)
                 if actual_duration > max_duration:
-                    speed_factor = min(actual_duration / max_duration, 2.5) # Giới hạn tăng tốc tối đa 2.5 lần để tránh vỡ giọng
+                    speed_factor = min(actual_duration / max_duration, 2.5)
                     adjust_audio_speed(temp_speech_file, speed_factor)
                 
                 return idx, start_sec, temp_speech_file
@@ -302,9 +296,9 @@ def build_audio_ffmpeg_parallel(subtitles, voice, output_audio_path, service_typ
     return True
 
 # ==========================================
-# BƯỚC 1: TRÍCH XUẤT PHỤ ĐỀ
+# BƯỚC 1: TRÍCH XUẤT PHỤ ĐỀ BẰNG GEMINI VISION
 # ==========================================
-if st.button("🚀 Bắt đầu phân tích Video & Dịch"):
+if st.button("🚀 Bắt đầu phân tích Video & Dịch (Đọc Phụ Đề Màn Hình)"):
     if not api_key:
         st.error("Vui lòng nhập Gemini API Key!")
     elif option == "Tải tệp video từ máy (MP4, MOV,...)" and not uploaded_file:
@@ -314,10 +308,9 @@ if st.button("🚀 Bắt đầu phân tích Video & Dịch"):
     else:
         try:
             genai.configure(api_key=api_key)
-            model = genai.GenerativeModel('gemini-3.5-flash')
+            model = genai.GenerativeModel('gemini-2.5-flash')
             temp_video_path = "temp_video.mp4"
-            temp_audio_path = "temp_audio_for_ai.mp3"
-            cleanup_files(temp_video_path, temp_audio_path, "phu_de_vietsub.srt", "phu_de_vietsub.ass", "video_hoanchinh.mp4", "vietnamese_voice.mp3")
+            cleanup_files(temp_video_path, "phu_de_vietsub.srt", "phu_de_vietsub.ass", "video_hoanchinh.mp4", "vietnamese_voice.mp3")
 
             if option == "Tải tệp video từ máy (MP4, MOV,...)":
                 file_ext = uploaded_file.name.split('.')[-1]
@@ -331,33 +324,38 @@ if st.button("🚀 Bắt đầu phân tích Video & Dịch"):
                     ydl.download([clean_url])
 
             st.session_state.temp_video_path = temp_video_path
-            st.info("🎵 Đang trích xuất âm thanh gửi cho AI...")
-            extract_audio_from_video(temp_video_path, temp_audio_path)
-
-            st.info("⚡ Đang phân tích & dịch thuật TOÀN BỘ video bằng Gemini...")
-            uploaded_audio = genai.upload_file(path=temp_audio_path)
-            while uploaded_audio.state.name == "PROCESSING":
-                time.sleep(2)
-                uploaded_audio = genai.get_file(uploaded_audio.name)
-
-            prompt = """Bạn là chuyên gia làm phụ đề phim. 
-            Nhiệm vụ: Dịch TOÀN BỘ file âm thanh sang tiếng Việt và tạo file SRT.
             
-            LƯU Ý CỰC KỲ QUAN TRỌNG:
-            - BẠN TUYỆT ĐỐI KHÔNG ĐƯỢC DỪNG GIỮA CHỪNG.
-            - PHẢI dịch liên tục từ giây 00:00 cho đến giây CÚI CÙNG của âm thanh.
-            - KHÔNG ĐƯỢC tóm tắt, KHÔNG ĐƯỢC bỏ sót bất kỳ câu thoại nào, cho dù video có dài đến đâu.
-            - Nếu bạn không dịch hết đến cuối, hệ thống phần mềm của chúng tôi sẽ bị sập.
-            - Định dạng: chuẩn file .srt. Dòng 1: Tiếng Trung, Dòng 2: Bản dịch Tiếng Việt."""
+            st.info("📹 Đang tải video lên AI để phân tích hình ảnh & đọc phụ đề...")
+            uploaded_video = genai.upload_file(path=temp_video_path)
+            while uploaded_video.state.name == "PROCESSING":
+                time.sleep(3)
+                uploaded_video = genai.get_file(uploaded_video.name)
 
-            generation_config = genai.types.GenerationConfig(max_output_tokens=8192, temperature=0.2)
-            response = model.generate_content([prompt, uploaded_audio], generation_config=generation_config)
+            st.info("⚡ AI đang đọc phụ đề chữ trên màn hình & dịch thuật toàn bộ video...")
+            
+            prompt = """Bạn là một chuyên gia nhận diện hình ảnh và trích xuất phụ đề video.
+            Nhiệm vụ của bạn:
+            1. Hãy XEM VIDEO và đọc toàn bộ PHỤ ĐỀ CHỮ (hardcoded subtitles/captions) xuất hiện trên màn hình (thường là Tiếng Trung).
+            2. Xác định MỐC THỜI GIAN chính xác khi từng câu phụ đề đó xuất hiện và biến mất trên màn hình (Start Time --> End Time).
+            3. Dịch từng câu phụ đề đó sang Tiếng Việt.
+
+            LƯU Ý CỰC KỲ QUAN TRỌNG:
+            - Phải lấy chuẩn thời gian hiển thị của chữ trên màn hình (định dạng 00:00:00,000 --> 00:00:00,000).
+            - BẠN TUYỆT ĐỐI KHÔNG ĐƯỢC BỎ SÓT câu phụ đề nào xuất hiện trong video từ giây đầu tiên đến giây cuối cùng.
+            - Trả về đúng ĐỊNH DẠNG FILE .SRT chuẩn:
+              Dòng 1: Số thứ tự
+              Dòng 2: Thời gian xuất hiện (Start --> End)
+              Dòng 3: Chữ gốc hiển thị trên màn hình
+              Dòng 4: Bản dịch Tiếng Việt tương ứng
+            - Tuyệt đối không thêm các lời giải thích hay hội thoại thừa ngoài nội dung file .SRT."""
+
+            generation_config = genai.types.GenerationConfig(max_output_tokens=8192, temperature=0.1)
+            response = model.generate_content([prompt, uploaded_video], generation_config=generation_config)
             
             st.session_state.srt_content = response.text.strip().replace('```srt', '').replace('```', '').strip()
-            genai.delete_file(uploaded_audio.name)
-            cleanup_files(temp_audio_path)
+            genai.delete_file(uploaded_video.name)
             
-            st.success("🎉 Trích xuất xong! Vui lòng cuộn xuống kiểm tra xem AI đã dịch đến câu cuối cùng của video chưa ở Bước 2.")
+            st.success("🎉 Trích xuất xong! Vui lòng cuộn xuống kiểm tra bảng phụ đề ở Bước 2.")
         except Exception as e:
             st.error(f"Đã xảy ra lỗi: {e}")
 
@@ -366,7 +364,7 @@ if st.button("🚀 Bắt đầu phân tích Video & Dịch"):
 # ==========================================
 if st.session_state.srt_content:
     st.divider()
-    edited_srt = st.text_area("Nội dung phụ đề (Kiểm tra xem AI đã dịch đủ đến cuối video chưa, bạn có thể sửa trực tiếp):", value=st.session_state.srt_content, height=380)
+    edited_srt = st.text_area("Nội dung phụ đề (Kiểm tra mốc thời gian & câu dịch, bạn có thể chỉnh sửa trực tiếp):", value=st.session_state.srt_content, height=380)
 
     if st.button("🎬 Xác nhận & Xuất Video Hoàn Chỉnh"):
         if "Trả phí" in tts_service and not active_api_key:
