@@ -2,4 +2,3 @@ streamlit
 yt-dlp
 google-generativeai
 edge-tts
-nest-asyncio
