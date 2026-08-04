@@ -9,47 +9,53 @@ import requests
 from concurrent.futures import ThreadPoolExecutor
 
 st.set_page_config(page_title="Auto Vietsub Tool", page_icon="🎬", layout="wide")
-st.title("🎬 Tool Auto Vietsub & Lồng Tiếng Việt bằng Gemini")
+st.title("🎬 Tool Auto Vietsub & Lồng Tiếng Việt bằng AI")
 st.write("Tự động trích xuất âm thanh -> Dịch thuật bằng Gemini -> Lồng tiếng song song & Xuất video hoàn chỉnh")
 
-# 1. Cấu hình API Key
-st.subheader("🔑 Cấu hình API Key")
-col_api1, col_api2 = st.columns(2)
-
-with col_api1:
-    api_key = st.text_input("1. Gemini API Key (Bắt buộc cho dịch thuật):", type="password", help="Lấy API Key miễn phí tại Google AI Studio")
+# 1. Cấu hình AI Dịch thuật
+st.subheader("🔑 1. Cấu hình AI Dịch thuật")
+api_key = st.text_input("Nhập Gemini API Key (Bắt buộc):", type="password")
 
 # 2. Tùy chọn dịch vụ Lồng tiếng
-st.subheader("🎙️ Tùy chọn Lồng tiếng")
+st.subheader("🎙️ 2. Tùy chọn Lồng tiếng")
 tts_service = st.radio(
     "Chọn dịch vụ AI lồng tiếng:",
-    ("Miễn phí (Edge-TTS)", "Trả phí (OpenAI TTS API - Giọng đọc Siêu thực)"),
+    ("Miễn phí (Edge-TTS)", "Trả phí (OpenAI - Giọng Siêu thực)", "Trả phí (ElevenLabs - Giọng Cảm xúc)"),
     horizontal=True
 )
 
-openai_api_key = ""
-if tts_service == "Trả phí (OpenAI TTS API - Giọng đọc Siêu thực)":
-    with col_api2:
-        openai_api_key = st.text_input("2. OpenAI API Key (Bắt buộc nếu dùng TTS trả phí):", type="password")
-    
+selected_voice = ""
+active_api_key = ""
+
+if tts_service == "Trả phí (OpenAI - Giọng Siêu thực)":
+    active_api_key = st.text_input("Nhập OpenAI API Key:", type="password")
     voice_option = st.selectbox(
-        "Chọn giọng đọc OpenAI:",
+        "Chọn giọng mặc định của OpenAI:",
         options=[
-            "nova (Nữ - Truyền cảm, tự nhiên)",
-            "shimmer (Nữ - Giọng trẻ trung, rõ ràng)",
-            "onyx (Nam - Giọng trầm ấm, chuyên nghiệp)",
-            "alloy (Trung tính - Rõ chữ)",
-            "echo (Nam - Nhẹ nhàng)",
-            "fable (Giọng kể chuyện)"
-        ],
-        index=0
+            "nova (Nữ - Truyền cảm, tự nhiên)", "shimmer (Nữ - Giọng trẻ trung)",
+            "onyx (Nam - Giọng trầm ấm)", "alloy (Trung tính)",
+            "echo (Nam - Nhẹ nhàng)", "fable (Giọng kể chuyện)"
+        ]
     )
     selected_voice = voice_option.split(" ")[0]
+
+elif tts_service == "Trả phí (ElevenLabs - Giọng Cảm xúc)":
+    active_api_key = st.text_input("Nhập ElevenLabs API Key:", type="password")
+    eleven_voices = {
+        "Rachel (Nữ - Tự nhiên)": "21m00Tcm4TlvDq8ikWAM",
+        "Antoni (Nam - Trẻ trung)": "ErXwobaYiN019PkySvjV",
+        "Bella (Nữ - Nhẹ nhàng)": "EXAVITQu4vr4xnSDxMaL",
+        "Arnold (Nam - Trầm ấm)": "VR6AewLTigWG4xSOukaG",
+        "Adam (Nam - Kể chuyện)": "pNInz6obpgDQGcFmaJcg",
+        "Elli (Nữ - Trẻ trung)": "MF3mGyEYCl7XYWbV9V6O"
+    }
+    voice_option = st.selectbox("Chọn giọng mặc định của ElevenLabs:", options=list(eleven_voices.keys()))
+    selected_voice = eleven_voices[voice_option]
+
 else:
     voice_option = st.selectbox(
         "Chọn giọng đọc Edge-TTS miễn phí:",
-        options=["vi-VN-HoaiMyNeural (Nữ)", "vi-VN-NamMinhNeural (Nam)"],
-        index=0
+        options=["vi-VN-HoaiMyNeural (Nữ)", "vi-VN-NamMinhNeural (Nam)"]
     )
     selected_voice = voice_option.split(" ")[0]
 
@@ -64,13 +70,13 @@ with col2:
     cover_original = st.checkbox("Tạo khung đen bao trùm che chữ Trung Quốc gốc", value=True)
 
 # 3. Nguồn Video
+st.divider()
 option = st.radio("Chọn nguồn video:", ("Tải tệp video từ máy (MP4, MOV,...)", "Dán link Douyin / Xiaohongshu"))
-
 uploaded_file = None
 raw_video_input = ""
 
 if option == "Tải tệp video từ máy (MP4, MOV,...)":
-    uploaded_file = st.file_uploader("Chọn video từ máy tính/điện thoại:", type=["mp4", "mov", "mkv", "avi", "webm"])
+    uploaded_file = st.file_uploader("Chọn video từ máy tính:", type=["mp4", "mov", "mkv", "avi", "webm"])
 else:
     raw_video_input = st.text_input("Nhập link video (hoặc văn bản chia sẻ từ Douyin):")
 
@@ -94,14 +100,7 @@ def extract_clean_url(text):
     return text.strip()
 
 def extract_audio_from_video(input_video_path, output_audio_path):
-    cmd = [
-        "ffmpeg", "-y",
-        "-i", input_video_path,
-        "-vn",
-        "-acodec", "libmp3lame",
-        "-q:a", "4",
-        output_audio_path
-    ]
+    cmd = ["ffmpeg", "-y", "-i", input_video_path, "-vn", "-acodec", "libmp3lame", "-q:a", "4", output_audio_path]
     subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 def filter_only_vietnamese_srt(srt_text):
@@ -111,8 +110,7 @@ def filter_only_vietnamese_srt(srt_text):
         lines = block.strip().split("\n")
         if len(lines) >= 3:
             header = lines[:2]
-            content_lines = lines[2:]
-            vi_lines = [l for l in content_lines if not re.search(r'[\u4e00-\u9fff]', l)]
+            vi_lines = [l for l in lines[2:] if not re.search(r'[\u4e00-\u9fff]', l)]
             if vi_lines:
                 cleaned_blocks.append("\n".join(header + vi_lines))
             else:
@@ -124,10 +122,7 @@ def filter_only_vietnamese_srt(srt_text):
 def time_to_seconds(time_str):
     time_str = time_str.replace(',', '.')
     parts = time_str.split(':')
-    hours = float(parts[0])
-    minutes = float(parts[1])
-    seconds = float(parts[2])
-    return hours * 3600 + minutes * 60 + seconds
+    return float(parts[0]) * 3600 + float(parts[1]) * 60 + float(parts[2])
 
 def parse_srt(srt_text):
     blocks = re.split(r'\n\s*\n', srt_text.strip())
@@ -148,8 +143,7 @@ def parse_srt(srt_text):
 def convert_srt_time_to_ass(srt_time_str):
     srt_time_str = srt_time_str.replace(',', '.')
     parts = srt_time_str.split(':')
-    h = int(parts[0])
-    m = int(parts[1])
+    h, m = int(parts[0]), int(parts[1])
     s_parts = parts[2].split('.')
     s = int(s_parts[0])
     cs = int(s_parts[1][:2]) if len(s_parts) > 1 else 0
@@ -173,8 +167,8 @@ Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour,
 Style: Default,Arial,24,&H00FFFFFF,&H00000000,&H00000000,{back_color},0,0,0,0,100,100,0,0,{border_style},{outline},0,2,10,10,25,1
 
 [Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-"""
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"""
+    
     dialogues = []
     for block in blocks:
         lines = block.strip().split("\n")
@@ -193,9 +187,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     with open(ass_filename, "w", encoding="utf-8") as f:
         f.write(header + "\n".join(dialogues))
 
-# Tạo Audio với Edge-TTS (Free) hoặc OpenAI TTS (Paid)
 def generate_single_tts(sub_item):
-    idx, sub, voice, service_type, oai_key = sub_item
+    idx, sub, voice, service_type, key = sub_item
     text = sub['text']
     start_sec = sub['start']
     temp_speech_file = f"temp_speech_{idx}.mp3"
@@ -203,20 +196,23 @@ def generate_single_tts(sub_item):
     for attempt in range(3):
         try:
             if service_type == "Paid_OpenAI":
-                headers = {
-                    "Authorization": f"Bearer {oai_key}",
-                    "Content-Type": "application/json"
-                }
-                payload = {
-                    "model": "tts-1",
-                    "input": text,
-                    "voice": voice
-                }
+                headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+                payload = {"model": "tts-1", "input": text, "voice": voice}
                 response = requests.post("https://api.openai.com/v1/audio/speech", json=payload, headers=headers, timeout=15)
                 if response.status_code == 200:
                     with open(temp_speech_file, "wb") as f:
                         f.write(response.content)
-            else: # Free Edge-TTS
+
+            elif service_type == "Paid_ElevenLabs":
+                headers = {"Accept": "audio/mpeg", "Content-Type": "application/json", "xi-api-key": key}
+                payload = {"text": text, "model_id": "eleven_multilingual_v2", "voice_settings": {"stability": 0.5, "similarity_boost": 0.5}}
+                url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice}"
+                response = requests.post(url, json=payload, headers=headers, timeout=15)
+                if response.status_code == 200:
+                    with open(temp_speech_file, "wb") as f:
+                        f.write(response.content)
+
+            else: # Edge-TTS
                 cmd = ["edge-tts", "--voice", voice, "--text", text, "--write-media", temp_speech_file]
                 subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
@@ -227,18 +223,15 @@ def generate_single_tts(sub_item):
             
     return idx, start_sec, None
 
-def build_audio_ffmpeg_parallel(subtitles, voice, output_audio_path, service_type, oai_key):
-    tasks = [(idx, sub, voice, service_type, oai_key) for idx, sub in enumerate(subtitles)]
+def build_audio_ffmpeg_parallel(subtitles, voice, output_audio_path, service_type, key):
+    tasks = [(idx, sub, voice, service_type, key) for idx, sub in enumerate(subtitles)]
+    max_workers = 3 if service_type == "Free_EdgeTTS" else 5
     
-    max_workers = 5 if service_type == "Paid_OpenAI" else 3
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         results = list(executor.map(generate_single_tts, tasks))
     
     results.sort(key=lambda x: x[0])
-
-    inputs = []
-    filter_complex_parts = []
-    temp_files = []
+    inputs, filter_complex_parts, temp_files = [], [], []
     
     for idx, start_sec, temp_speech_file in results:
         if temp_speech_file:
@@ -254,22 +247,18 @@ def build_audio_ffmpeg_parallel(subtitles, voice, output_audio_path, service_typ
     mix_inputs = "".join([f"[a{i}]" for i in range(len(filter_complex_parts))])
     filter_complex_str = ";".join(filter_complex_parts) + f";{mix_inputs}amix=inputs={len(filter_complex_parts)}:normalize=0:dropout_transition=0[outa]"
 
-    filter_script_file = "audio_filter.txt"
-    with open(filter_script_file, "w", encoding="utf-8") as f:
+    with open("audio_filter.txt", "w", encoding="utf-8") as f:
         f.write(filter_complex_str)
 
-    cmd = ["ffmpeg", "-y"] + inputs + ["-filter_complex_script", filter_script_file, "-map", "[outa]", output_audio_path]
+    cmd = ["ffmpeg", "-y"] + inputs + ["-filter_complex_script", "audio_filter.txt", "-map", "[outa]", output_audio_path]
     subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     
-    cleanup_files(*temp_files)
-    cleanup_files(filter_script_file)
+    cleanup_files(*temp_files, "audio_filter.txt")
     return True
 
 # ==========================================
 # BƯỚC 1: TRÍCH XUẤT PHỤ ĐỀ
 # ==========================================
-st.subheader("Bước 1: Phân tích Video & Dịch toàn bộ")
-
 if st.button("🚀 Bắt đầu phân tích Video & Dịch"):
     if not api_key:
         st.error("Vui lòng nhập Gemini API Key!")
@@ -281,10 +270,8 @@ if st.button("🚀 Bắt đầu phân tích Video & Dịch"):
         try:
             genai.configure(api_key=api_key)
             model = genai.GenerativeModel('gemini-1.5-flash')
-
             temp_video_path = "temp_video.mp4"
             temp_audio_path = "temp_audio_for_ai.mp3"
-            
             cleanup_files(temp_video_path, temp_audio_path, "phu_de_vietsub.srt", "phu_de_vietsub.ass", "video_hoanchinh.mp4", "vietnamese_voice.mp3")
 
             if option == "Tải tệp video từ máy (MP4, MOV,...)":
@@ -294,55 +281,38 @@ if st.button("🚀 Bắt đầu phân tích Video & Dịch"):
                     f.write(uploaded_file.getbuffer())
             else:
                 clean_url = extract_clean_url(raw_video_input)
-                ydl_opts = {
-                    'format': 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best',
-                    'outtmpl': temp_video_path,
-                    'quiet': True,
-                    'no_warnings': True,
-                }
+                ydl_opts = {'format': 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best', 'outtmpl': temp_video_path, 'quiet': True}
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     ydl.download([clean_url])
 
             st.session_state.temp_video_path = temp_video_path
-
             st.info("🎵 Đang trích xuất âm thanh gửi cho AI...")
             extract_audio_from_video(temp_video_path, temp_audio_path)
 
             st.info("⚡ Đang phân tích & dịch thuật TOÀN BỘ video bằng Gemini...")
             uploaded_audio = genai.upload_file(path=temp_audio_path)
-            
             while uploaded_audio.state.name == "PROCESSING":
                 time.sleep(2)
                 uploaded_audio = genai.get_file(uploaded_audio.name)
 
-            prompt = """
-            Bạn là chuyên gia làm phụ đề phim chuyên nghiệp.
-            Hãy nghe âm thanh tiếng Trung trong file từ GIÂY ĐẦU TIÊN đến GIÂY CUỐI CÙNG để tạo phụ đề dịch Tiếng Việt.
+            prompt = """Bạn là chuyên gia làm phụ đề phim. 
+            Nhiệm vụ: Dịch TOÀN BỘ file âm thanh sang tiếng Việt và tạo file SRT.
             
-            YÊU CẦU BẮT BUỘC:
-            1. PHẢI TẠO PHỤ ĐỀ CHO TOÀN BỘ VIDEO, TUYỆT ĐỐI KHÔNG ĐƯỢC DỪNG GIỮA CHỪNG HOẶC BỎ DỞ BẤT KỲ ĐOẠN NÀO.
-            2. Căn thời gian (timestamp) chính xác từng câu thoại.
-            3. Mỗi ô phụ đề gồm 2 dòng:
-               Dòng 1: Tiếng Trung gốc
-               Dòng 2: Bản dịch Tiếng Việt (ngắn gọn, tự nhiên, dưới 8 từ)
-            4. Trình bày CHÍNH XÁC theo chuẩn định dạng file .srt.
-            """
+            LƯU Ý CỰC KỲ QUAN TRỌNG:
+            - BẠN TUYỆT ĐỐI KHÔNG ĐƯỢC DỪNG GIỮA CHỪNG.
+            - PHẢI dịch liên tục từ giây 00:00 cho đến giây CÚI CÙNG của âm thanh.
+            - KHÔNG ĐƯỢC tóm tắt, KHÔNG ĐƯỢC bỏ sót bất kỳ câu thoại nào, cho dù video có dài đến đâu.
+            - Nếu bạn không dịch hết đến cuối, hệ thống phần mềm của chúng tôi sẽ bị sập.
+            - Định dạng: chuẩn file .srt. Dòng 1: Tiếng Trung, Dòng 2: Bản dịch Tiếng Việt."""
 
-            # Cấu hình max_output_tokens=8192 chống tràn và cắt ngang phụ đề ở nửa sau video
-            generation_config = genai.types.GenerationConfig(
-                max_output_tokens=8192,
-                temperature=0.2
-            )
-
+            generation_config = genai.types.GenerationConfig(max_output_tokens=8192, temperature=0.2)
             response = model.generate_content([prompt, uploaded_audio], generation_config=generation_config)
-            srt_text = response.text.strip().replace('```srt', '').replace('```', '').strip()
-
-            st.session_state.srt_content = srt_text
+            
+            st.session_state.srt_content = response.text.strip().replace('```srt', '').replace('```', '').strip()
             genai.delete_file(uploaded_audio.name)
             cleanup_files(temp_audio_path)
             
-            st.success("🎉 Trích xuất phụ đề toàn bộ video thành công! Kiểm tra và sửa đổi ở Bước 2.")
-
+            st.success("🎉 Trích xuất xong! Vui lòng cuộn xuống kiểm tra xem AI đã dịch đến câu cuối cùng của video chưa ở Bước 2.")
         except Exception as e:
             st.error(f"Đã xảy ra lỗi: {e}")
 
@@ -351,123 +321,51 @@ if st.button("🚀 Bắt đầu phân tích Video & Dịch"):
 # ==========================================
 if st.session_state.srt_content:
     st.divider()
-    st.subheader("Bước 2: Đối chiếu Tiếng Trung gốc & Xuất Video")
-    st.info("💡 Ô bên dưới hiển thị chữ Trung gốc để đối chiếu. Bạn có thể kiểm tra danh sách phụ đề đã kéo dài tới cuối video hay chưa.")
-    
-    edited_srt = st.text_area(
-        label="Nội dung phụ đề (Xem chữ Trung gốc và sửa câu Tiếng Việt tại đây):",
-        value=st.session_state.srt_content,
-        height=380
-    )
+    edited_srt = st.text_area("Nội dung phụ đề (Kiểm tra xem AI đã dịch đủ đến cuối video chưa, bạn có thể sửa trực tiếp):", value=st.session_state.srt_content, height=380)
 
     if st.button("🎬 Xác nhận & Xuất Video Hoàn Chỉnh"):
-        if tts_service == "Trả phí (OpenAI TTS API - Giọng đọc Siêu thực)" and not openai_api_key:
-            st.error("Vui lòng nhập OpenAI API Key để sử dụng dịch vụ TTS trả phí!")
+        if "Trả phí" in tts_service and not active_api_key:
+            st.error("❌ Vui lòng nhập API Key cho dịch vụ Lồng tiếng bạn đã chọn!")
+        elif not selected_voice:
+            st.error("❌ Không có giọng đọc nào được chọn!")
         else:
             try:
-                srt_filename = "phu_de_vietsub.srt"
-                ass_filename = "phu_de_vietsub.ass"
-                output_video_file = "video_hoanchinh.mp4"
-                audio_tts_file = "vietnamese_voice.mp3"
-
-                vi_only_srt = filter_only_vietnamese_srt(edited_srt)
+                srt_filename, ass_filename, output_video_file, audio_tts_file = "phu_de_vietsub.srt", "phu_de_vietsub.ass", "video_hoanchinh.mp4", "vietnamese_voice.mp3"
                 with open(srt_filename, "w", encoding="utf-8") as f:
-                    f.write(vi_only_srt)
-
+                    f.write(filter_only_vietnamese_srt(edited_srt))
                 create_ass_file(edited_srt, ass_filename, cover_original=cover_original)
-                input_video_path = st.session_state.temp_video_path
 
-                st.info("🎙️ Đang tạo giọng đọc AI lồng tiếng toàn bộ video...")
-                subtitles = parse_srt(edited_srt)
-                
-                service_type = "Paid_OpenAI" if "OpenAI" in tts_service else "Free_EdgeTTS"
-                has_audio = build_audio_ffmpeg_parallel(subtitles, selected_voice, audio_tts_file, service_type, openai_api_key)
+                st.info("🎙️ Đang tạo giọng đọc AI...")
+                if "ElevenLabs" in tts_service:
+                    s_type = "Paid_ElevenLabs"
+                elif "OpenAI" in tts_service:
+                    s_type = "Paid_OpenAI"
+                else:
+                    s_type = "Free_EdgeTTS"
 
+                has_audio = build_audio_ffmpeg_parallel(parse_srt(edited_srt), selected_voice, audio_tts_file, s_type, active_api_key)
                 st.info("🎬 Đang ghép Phụ đề & Âm thanh vào Video...")
                 
-                vol_mapping = {
-                    "Tắt âm hoàn toàn (0%)": "0.0",
-                    "Nhạc nền cực nhỏ (5%)": "0.05",
-                    "Vừa phải (15%)": "0.15"
-                }
-                bg_vol = vol_mapping[vol_option]
+                bg_vol = {"Tắt âm hoàn toàn (0%)": "0.0", "Nhạc nền cực nhỏ (5%)": "0.05", "Vừa phải (15%)": "0.15"}[vol_option]
                 
                 if has_audio and os.path.exists(audio_tts_file):
-                    if bg_vol == "0.0":
-                        cmd_mix = [
-                            "ffmpeg", "-y",
-                            "-i", input_video_path,
-                            "-i", audio_tts_file,
-                            "-filter_complex", f"[0:v]subtitles={ass_filename}[outv]",
-                            "-map", "[outv]",
-                            "-map", "1:a",
-                            "-c:v", "libx264",
-                            "-c:a", "aac",
-                            output_video_file
-                        ]
-                    else:
-                        cmd_mix = [
-                            "ffmpeg", "-y",
-                            "-i", input_video_path,
-                            "-i", audio_tts_file,
-                            "-filter_complex",
-                            f"[0:a]volume={bg_vol}[bg];[bg][1:a]amix=inputs=2:duration=first:normalize=0[outa];[0:v]subtitles={ass_filename}[outv]",
-                            "-map", "[outv]",
-                            "-map", "[outa]",
-                            "-c:v", "libx264",
-                            "-c:a", "aac",
-                            output_video_file
-                        ]
-                    
+                    cmd = ["ffmpeg", "-y", "-i", st.session_state.temp_video_path, "-i", audio_tts_file, "-filter_complex", 
+                           f"[0:a]volume={bg_vol}[bg];[bg][1:a]amix=inputs=2:duration=first:normalize=0[outa];[0:v]subtitles={ass_filename}[outv]" if bg_vol != "0.0" 
+                           else f"[0:v]subtitles={ass_filename}[outv]", 
+                           "-map", "[outv]", "-map", "[outa]" if bg_vol != "0.0" else "1:a", "-c:v", "libx264", "-c:a", "aac", output_video_file]
                     try:
-                        subprocess.run(cmd_mix, check=True, capture_output=True, text=True)
+                        subprocess.run(cmd, check=True, capture_output=True, text=True)
                     except subprocess.CalledProcessError:
-                        cmd_replace_audio = [
-                            "ffmpeg", "-y",
-                            "-i", input_video_path,
-                            "-i", audio_tts_file,
-                            "-filter_complex", f"[0:v]subtitles={ass_filename}[outv]",
-                            "-map", "[outv]",
-                            "-map", "1:a",
-                            "-c:v", "libx264",
-                            "-c:a", "aac",
-                            output_video_file
-                        ]
-                        subprocess.run(cmd_replace_audio, check=True, capture_output=True, text=True)
+                        subprocess.run(["ffmpeg", "-y", "-i", st.session_state.temp_video_path, "-i", audio_tts_file, "-filter_complex", f"[0:v]subtitles={ass_filename}[outv]", "-map", "[outv]", "-map", "1:a", "-c:v", "libx264", "-c:a", "aac", output_video_file], check=True)
                 else:
-                    cmd_no_audio = [
-                        "ffmpeg", "-y",
-                        "-i", input_video_path,
-                        "-vf", f"subtitles={ass_filename}",
-                        "-c:a", "copy",
-                        output_video_file
-                    ]
-                    subprocess.run(cmd_no_audio, check=True, capture_output=True, text=True)
+                    subprocess.run(["ffmpeg", "-y", "-i", st.session_state.temp_video_path, "-vf", f"subtitles={ass_filename}", "-c:a", "copy", output_video_file], check=True)
 
-                st.success("🎉 Hoàn tất! Video đã được Vietsub & Lồng tiếng full từ đầu đến cuối.")
-
+                st.success("🎉 Hoàn tất! Video đã được Vietsub & Lồng tiếng full.")
                 col_a, col_b = st.columns(2)
                 with col_a:
-                    with open(srt_filename, "rb") as file_srt:
-                        st.download_button(
-                            label="📝 Tải File Phụ Đề (.srt)",
-                            data=file_srt,
-                            file_name="vietsub.srt",
-                            mime="text/plain"
-                        )
+                    st.download_button("📝 Tải File Phụ Đề (.srt)", data=open(srt_filename, "rb"), file_name="vietsub.srt", mime="text/plain")
                 with col_b:
-                    if os.path.exists(output_video_file):
-                        with open(output_video_file, "rb") as file_vid:
-                            st.download_button(
-                                label="🎬 Tải Video Hoàn Chỉnh (Vietsub + Lồng Tiếng)",
-                                data=file_vid,
-                                file_name="video_vietsub_longtieng.mp4",
-                                mime="video/mp4"
-                            )
+                    st.download_button("🎬 Tải Video Hoàn Chỉnh", data=open(output_video_file, "rb"), file_name="video_vietsub_longtieng.mp4", mime="video/mp4")
 
-            except subprocess.CalledProcessError as e:
-                err_text = e.stderr if isinstance(e.stderr, str) else e.stderr.decode('utf-8', errors='ignore')
-                last_lines = "\n".join(err_text.strip().splitlines()[-10:])
-                st.error(f"Lỗi FFmpeg: {last_lines}")
             except Exception as e:
-                st.error(f"Lỗi khi xử lý video: {e}")
+                st.error(f"Lỗi: {e}")
