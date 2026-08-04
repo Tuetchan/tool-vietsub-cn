@@ -187,10 +187,49 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\
     with open(ass_filename, "w", encoding="utf-8") as f:
         f.write(header + "\n".join(dialogues))
 
+# --- HÀM TÍNH THỜI LƯỢNG ÂM THANH ---
+def get_audio_duration(file_path):
+    try:
+        cmd = [
+            "ffprobe", "-v", "error", "-show_entries", "format=duration",
+            "-of", "default=noprintwrappers=1:nokey=1", file_path
+        ]
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
+        return float(result.stdout.strip())
+    except Exception:
+        return 0.0
+
+# --- HÀM TỰ ĐỘNG TĂNG TỐC ĐỘ ÂM THANH NẾU BỊ DÀI HƠN KHUNG THỜI GIAN GỐC ---
+def adjust_audio_speed(input_file, speed_factor):
+    if speed_factor <= 1.03:  # Bỏ qua nếu chênh lệch không đáng kể (dưới 3%)
+        return
+    
+    temp_out = input_file + "_speed.mp3"
+    try:
+        # Tách chuỗi filter atempo nếu hệ số > 2.0 (FFmpeg atempo hỗ trợ từ 0.5 đến 2.0)
+        factors = []
+        f = speed_factor
+        while f > 2.0:
+            factors.append(2.0)
+            f /= 2.0
+        factors.append(f)
+        filter_str = ",".join([f"atempo={x:.3f}" for x in factors])
+        
+        cmd = ["ffmpeg", "-y", "-i", input_file, "-filter:a", filter_str, temp_out]
+        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        
+        if os.path.exists(temp_out) and os.path.getsize(temp_out) > 0:
+            os.replace(temp_out, input_file)
+    except Exception:
+        if os.path.exists(temp_out):
+            os.remove(temp_out)
+
 def generate_single_tts(sub_item):
     idx, sub, voice, service_type, key = sub_item
     text = sub['text']
     start_sec = sub['start']
+    end_sec = sub['end']
+    max_duration = max(0.5, end_sec - start_sec)
     temp_speech_file = f"temp_speech_{idx}.mp3"
     
     for attempt in range(3):
@@ -217,6 +256,12 @@ def generate_single_tts(sub_item):
                 subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
             if os.path.exists(temp_speech_file) and os.path.getsize(temp_speech_file) > 0:
+                # TỰ ĐỘNG KIỂM TRA VÀ TĂNG TỐC ĐỘ NÓI KHỐP VỚI KHUNG THỜI GIAN VIDEO GỐC
+                actual_duration = get_audio_duration(temp_speech_file)
+                if actual_duration > max_duration:
+                    speed_factor = min(actual_duration / max_duration, 2.5) # Giới hạn tăng tốc tối đa 2.5 lần để tránh vỡ giọng
+                    adjust_audio_speed(temp_speech_file, speed_factor)
+                
                 return idx, start_sec, temp_speech_file
         except Exception:
             time.sleep(1)
