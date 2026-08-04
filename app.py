@@ -8,7 +8,7 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor
 
 st.set_page_config(page_title="Auto Vietsub Tool", page_icon="🎬", layout="wide")
-st.title("🎬 Tool Auto Vietsub & Lồng Tiếng Việt bằng Gemini (Siêu Nhanh & Tiết Kiệm)")
+st.title("🎬 Tool Auto Vietsub & Lồng Tiếng Việt bằng Gemini")
 st.write("Tự động trích xuất âm thanh -> Dịch thuật bằng Gemini -> Lồng tiếng song song & Xuất video hoàn chỉnh")
 
 # Nhập API Key
@@ -52,7 +52,6 @@ def extract_clean_url(text):
         return url_match.group(0)
     return text.strip()
 
-# Tách riêng file âm thanh MP3 từ Video để gửi cho AI (Giúp tiết kiệm Token & chạy siêu nhanh)
 def extract_audio_from_video(input_video_path, output_audio_path):
     cmd = [
         "ffmpeg", "-y",
@@ -62,7 +61,7 @@ def extract_audio_from_video(input_video_path, output_audio_path):
         "-q:a", "4",
         output_audio_path
     ]
-    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 def filter_only_vietnamese_srt(srt_text):
     cleaned_blocks = []
@@ -112,22 +111,19 @@ def generate_single_tts(sub_item):
     temp_speech_file = f"temp_speech_{idx}.mp3"
     try:
         cmd = ["edge-tts", "--voice", voice, "--text", text, "--write-media", temp_speech_file]
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if os.path.exists(temp_speech_file):
             return idx, start_sec, temp_speech_file
     except Exception:
         pass
     return idx, start_sec, None
 
-# Xử lý tạo giọng lồng tiếng SONG SONG (Đa luồng) giúp tăng tốc gấp 5 lần
 def build_audio_ffmpeg_parallel(subtitles, voice, output_audio_path):
     tasks = [(idx, sub, voice) for idx, sub in enumerate(subtitles)]
     
-    # Chạy 5 luồng cùng lúc để tải audio nhanh hơn
     with ThreadPoolExecutor(max_workers=5) as executor:
         results = list(executor.map(generate_single_tts, tasks))
     
-    # Sắp xếp lại thứ tự đúng theo mốc thời gian
     results.sort(key=lambda x: x[0])
 
     inputs = []
@@ -149,12 +145,12 @@ def build_audio_ffmpeg_parallel(subtitles, voice, output_audio_path):
     filter_complex_str = ";".join(filter_complex_parts) + f";{mix_inputs}amix=inputs={len(filter_complex_parts)}:dropout_transition=0[outa]"
 
     cmd = ["ffmpeg", "-y"] + inputs + ["-filter_complex", filter_complex_str, "-map", "[outa]", output_audio_path]
-    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     cleanup_files(*temp_files)
     return True
 
 # ==========================================
-# BƯỚC 1: TRÍCH XUẤT PHỤ ĐỀ (TỐI ƯU AUDIO)
+# BƯỚC 1: TRÍCH XUẤT PHỤ ĐỀ
 # ==========================================
 st.subheader("Bước 1: Trích xuất & Dịch phụ đề")
 
@@ -168,7 +164,7 @@ if st.button("🚀 Bắt đầu phân tích Video & Dịch"):
     else:
         try:
             genai.configure(api_key=api_key)
-            model = genai.GenerativeModel('gemini-3.5-flash')
+            model = genai.GenerativeModel('gemini-1.5-flash')
 
             temp_video_path = "temp_video.mp4"
             temp_audio_path = "temp_audio_for_ai.mp3"
@@ -182,7 +178,6 @@ if st.button("🚀 Bắt đầu phân tích Video & Dịch"):
                     f.write(uploaded_file.getbuffer())
             else:
                 clean_url = extract_clean_url(raw_video_input)
-                # Giới hạn độ phân giải max 720p để tải & render nhẹ, nhanh hơn
                 ydl_opts = {
                     'format': 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best',
                     'outtmpl': temp_video_path,
@@ -194,11 +189,10 @@ if st.button("🚀 Bắt đầu phân tích Video & Dịch"):
 
             st.session_state.temp_video_path = temp_video_path
 
-            # Tách File âm thanh ra để gửi AI (Tiết kiệm >80% Token)
-            st.info("🎵 Đang trích xuất file âm thanh nhẹ để gửi AI phân tích...")
+            st.info("🎵 Đang trích xuất âm thanh gửi cho AI...")
             extract_audio_from_video(temp_video_path, temp_audio_path)
 
-            st.info("⚡ Đang gửi âm thanh lên AI (Tối ưu tốc độ & tiết kiệm Token)...")
+            st.info("⚡ Đang phân tích & dịch thuật bằng Gemini...")
             uploaded_audio = genai.upload_file(path=temp_audio_path)
             
             while uploaded_audio.state.name == "PROCESSING":
@@ -229,12 +223,12 @@ if st.button("🚀 Bắt đầu phân tích Video & Dịch"):
             st.error(f"Đã xảy ra lỗi: {e}")
 
 # ==========================================
-# BƯỚC 2: TẠO 1 VIDEO HOÀN CHỈNH (TỐI ƯU TTS)
+# BƯỚC 2: TẠO 1 VIDEO HOÀN CHỈNH
 # ==========================================
 if st.session_state.srt_content:
     st.divider()
     st.subheader("Bước 2: Đối chiếu Tiếng Trung gốc & Xuất Video")
-    st.info("💡 Ô bên dưới hiển thị chữ Trung gốc để bạn đối chiếu. Ứng dụng sẽ xóa chữ Trung, lồng tiếng Việt đa luồng cực nhanh và xuất ra 1 video duy nhất!")
+    st.info("💡 Ô bên dưới hiển thị chữ Trung gốc để bạn đối chiếu. Ứng dụng sẽ xóa chữ Trung, lồng tiếng Việt và ghép vào video hoàn chỉnh!")
     
     edited_srt = st.text_area(
         label="Nội dung phụ đề (Xem chữ Trung gốc và sửa câu Tiếng Việt tại đây):",
@@ -252,44 +246,60 @@ if st.session_state.srt_content:
             with open(srt_filename, "w", encoding="utf-8") as f:
                 f.write(vi_only_srt)
 
-            input_video_path = os.path.abspath(st.session_state.temp_video_path).replace("\\", "/")
-            srt_path_clean = os.path.abspath(srt_filename).replace("\\", "/").replace(":", "\\:")
-            output_video_path = os.path.abspath(output_video_file).replace("\\", "/")
+            input_video_path = st.session_state.temp_video_path
 
             if cover_original:
                 style_str = "FontName=Arial,FontSize=16,PrimaryColour=&H00FFFFFF,BorderStyle=3,BackColour=&H90000000,MarginV=20"
             else:
                 style_str = "FontName=Arial,FontSize=16,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2,MarginV=20"
 
-            st.info("🎙️ Đang tạo giọng đọc AI lồng tiếng đa luồng (Song song)...")
+            st.info("🎙️ Đang tạo giọng đọc AI lồng tiếng...")
             subtitles = parse_srt(edited_srt)
             has_audio = build_audio_ffmpeg_parallel(subtitles, selected_voice, audio_tts_file)
 
             st.info("🎬 Đang ghép Phụ đề & Âm thanh vào Video...")
+            
             if has_audio and os.path.exists(audio_tts_file):
-                audio_tts_path = os.path.abspath(audio_tts_file).replace("\\", "/")
-                cmd = [
+                # Thử ghép trộn âm thanh gốc (nhỏ 15%) + lồng tiếng
+                cmd_mix = [
                     "ffmpeg", "-y",
                     "-i", input_video_path,
-                    "-i", audio_tts_path,
+                    "-i", audio_tts_file,
                     "-filter_complex",
-                    f"[0:a]volume=0.15[bg];[bg][1:a]amix=inputs=2:duration=first[outa];[0:v]subtitles='{srt_path_clean}':force_style='{style_str}'[outv]",
+                    f"[0:a]volume=0.15[bg];[bg][1:a]amix=inputs=2:duration=first[outa];[0:v]subtitles={srt_filename}:force_style='{style_str}'[outv]",
                     "-map", "[outv]",
                     "-map", "[outa]",
                     "-c:v", "libx264",
                     "-c:a", "aac",
-                    output_video_path
+                    output_video_file
                 ]
+                
+                try:
+                    subprocess.run(cmd_mix, check=True, capture_output=True, text=True)
+                except subprocess.CalledProcessError:
+                    # Nếu video gốc không có luồng audio làm amix thất bại -> Fallback thay hẳn audio bằng TTS
+                    cmd_replace_audio = [
+                        "ffmpeg", "-y",
+                        "-i", input_video_path,
+                        "-i", audio_tts_file,
+                        "-filter_complex", f"[0:v]subtitles={srt_filename}:force_style='{style_str}'[outv]",
+                        "-map", "[outv]",
+                        "-map", "1:a",
+                        "-c:v", "libx264",
+                        "-c:a", "aac",
+                        output_video_file
+                    ]
+                    subprocess.run(cmd_replace_audio, check=True, capture_output=True, text=True)
             else:
-                cmd = [
+                cmd_no_audio = [
                     "ffmpeg", "-y",
                     "-i", input_video_path,
-                    "-vf", f"subtitles='{srt_path_clean}':force_style='{style_str}'",
+                    "-vf", f"subtitles={srt_filename}:force_style='{style_str}'",
                     "-c:a", "copy",
-                    output_video_path
+                    output_video_file
                 ]
+                subprocess.run(cmd_no_audio, check=True, capture_output=True, text=True)
 
-            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             st.success("🎉 Hoàn tất! Video đã ghép đầy đủ Vietsub và Lồng tiếng Việt thành công.")
 
             col_a, col_b = st.columns(2)
@@ -311,5 +321,7 @@ if st.session_state.srt_content:
                             mime="video/mp4"
                         )
 
+        except subprocess.CalledProcessError as e:
+            st.error(f"Lỗi FFmpeg chi tiết: {e.stderr if e.stderr else e}")
         except Exception as e:
             st.error(f"Lỗi khi xử lý video: {e}")
