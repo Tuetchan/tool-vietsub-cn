@@ -2,6 +2,4 @@ streamlit
 yt-dlp
 google-generativeai
 edge-tts
-pydub
-pyaudioop
 nest-asyncio
