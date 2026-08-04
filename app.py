@@ -8,6 +8,10 @@ import subprocess
 import asyncio
 import edge_tts
 from pydub import AudioSegment
+import nest_asyncio
+
+# Áp dụng patch cho Streamlit Cloud để không bị lỗi Event Loop
+nest_asyncio.apply()
 
 st.set_page_config(page_title="Auto Vietsub Tool", page_icon="🎬", layout="wide")
 st.title("🎬 Tool Auto Vietsub & Lồng Tiếng Việt bằng Gemini")
@@ -119,15 +123,17 @@ def create_full_audio_track(subtitles, total_duration_ms, voice):
         temp_speech_file = f"temp_speech_{idx}.mp3"
         temp_files.append(temp_speech_file)
 
+        # Chạy bất đồng bộ an toàn
         asyncio.run(generate_voice_file(text, voice, temp_speech_file))
 
-        speech = AudioSegment.from_file(temp_speech_file)
-        if len(speech) > duration_ms and duration_ms > 0:
-            speed_factor = len(speech) / duration_ms
-            speed_factor = min(speed_factor, 1.4)
-            speech = speech.speedup(playback_speed=speed_factor)
+        if os.path.exists(temp_speech_file):
+            speech = AudioSegment.from_file(temp_speech_file)
+            if len(speech) > duration_ms and duration_ms > 0:
+                speed_factor = len(speech) / duration_ms
+                speed_factor = min(speed_factor, 1.4)
+                speech = speech.speedup(playback_speed=speed_factor)
 
-        audio_track = audio_track.overlay(speech, position=start_ms)
+            audio_track = audio_track.overlay(speech, position=start_ms)
 
     cleanup_files(*temp_files)
     return audio_track
@@ -148,7 +154,7 @@ if st.button("🚀 Bắt đầu phân tích Video & Dịch"):
         try:
             genai.configure(api_key=api_key)
             
-            # Khai báo model đúng tên gemini-3.5-flash theo yêu cầu gốc
+            # Khai báo giữ nguyên model gemini-3.5-flash theo đúng yêu cầu
             model = genai.GenerativeModel('gemini-3.5-flash')
 
             temp_video_path = "temp_video.mp4"
