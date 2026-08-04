@@ -19,13 +19,22 @@ if "srt_content" not in st.session_state:
 if "temp_video_path" not in st.session_state:
     st.session_state.temp_video_path = ""
 
-cover_original = st.checkbox("Tự động tạo khung nền đen che lên chữ Trung Quốc gốc ở dưới video", value=True)
+col1, col2, col3 = st.columns(3)
+with col1:
+    voice_option = st.selectbox(
+        "Chọn giọng đọc AI:",
+        options=["vi-VN-HoaiMyNeural (Nữ)", "vi-VN-NamMinhNeural (Nam)"],
+        index=0
+    )
+with col2:
+    vol_option = st.selectbox(
+        "Âm lượng video gốc (Nhạc nền):",
+        options=["Tắt âm hoàn toàn (0%)", "Nhạc nền cực nhỏ (5%)", "Vừa phải (15%)"],
+        index=1
+    )
+with col3:
+    cover_original = st.checkbox("Tạo khung đen bao trùm chữ Trung", value=True)
 
-voice_option = st.selectbox(
-    "Chọn giọng đọc Lồng tiếng AI:",
-    options=["vi-VN-HoaiMyNeural (Nữ)", "vi-VN-NamMinhNeural (Nam)"],
-    index=0
-)
 selected_voice = voice_option.split(" ")[0]
 
 option = st.radio("Chọn nguồn video:", ("Tải tệp video từ máy (MP4, MOV,...)", "Dán link Douyin / Xiaohongshu"))
@@ -114,14 +123,14 @@ def convert_srt_time_to_ass(srt_time_str):
     cs = int(s_parts[1][:2]) if len(s_parts) > 1 else 0
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
-# Hàm tự động tạo file .ass định dạng đẹp & an toàn tuyệt đối với FFmpeg
+# Tối ưu tạo khung nền đen che chữ cực mạnh
 def create_ass_file(srt_text, ass_filename, cover_original=True):
     vi_srt = filter_only_vietnamese_srt(srt_text)
     blocks = re.split(r'\n\s*\n', vi_srt.strip())
     
     border_style = "3" if cover_original else "1"
-    back_color = "&H80000000" if cover_original else "&H00000000"
-    outline = "0" if cover_original else "2"
+    back_color = "&H00000000" if cover_original else "&H00000000" # &H00000000 là Đen tuyền 100%
+    outline = "12" if cover_original else "2" # Outline 12 làm hộp viền đen phình to ra xung quanh che mờ mọi thứ
 
     header = f"""[Script Info]
 ScriptType: v4.00+
@@ -130,7 +139,7 @@ PlayResY: 720
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Arial,22,&H00FFFFFF,&H00000000,&H00000000,{back_color},0,0,0,0,100,100,0,0,{border_style},{outline},0,2,10,10,25,1
+Style: Default,Arial,24,&H00FFFFFF,&H00000000,&H00000000,{back_color},0,0,0,0,100,100,0,0,{border_style},{outline},0,2,10,10,25,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -146,29 +155,38 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 text_lines = [l for l in lines[2:] if not re.search(r'[\u4e00-\u9fff]', l)]
                 text = r"\N".join(text_lines).strip()
                 if text:
+                    # Kéo dài hộp đen bằng khoảng trắng cứng (Hard Spaces \h) để nó luôn rộng hơn chữ TQ
+                    if cover_original:
+                        text = r"\h\h\h\h" + text + r"\h\h\h\h"
                     dialogues.append(f"Dialogue: 0,{start_ass},{end_ass},Default,,0,0,0,,{text}")
     
     with open(ass_filename, "w", encoding="utf-8") as f:
         f.write(header + "\n".join(dialogues))
 
+# Tích hợp Auto Retry để 100% tải đủ toàn bộ âm thanh lồng tiếng
 def generate_single_tts(sub_item):
     idx, sub, voice = sub_item
     text = sub['text']
     start_sec = sub['start']
     temp_speech_file = f"temp_speech_{idx}.mp3"
-    try:
-        cmd = ["edge-tts", "--voice", voice, "--text", text, "--write-media", temp_speech_file]
-        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        if os.path.exists(temp_speech_file):
-            return idx, start_sec, temp_speech_file
-    except Exception:
-        pass
+    
+    for attempt in range(3): # Thử tối đa 3 lần nếu máy chủ edge-tts bị lỗi
+        try:
+            cmd = ["edge-tts", "--voice", voice, "--text", text, "--write-media", temp_speech_file]
+            subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            if os.path.exists(temp_speech_file) and os.path.getsize(temp_speech_file) > 0:
+                return idx, start_sec, temp_speech_file
+        except Exception:
+            time.sleep(1) # Nghỉ 1s trước khi thử lại để tránh bị chặn
+            
     return idx, start_sec, None
 
+# Tối ưu tránh tràn bộ nhớ FFmpeg script & Chuẩn hoá âm thanh 
 def build_audio_ffmpeg_parallel(subtitles, voice, output_audio_path):
     tasks = [(idx, sub, voice) for idx, sub in enumerate(subtitles)]
     
-    with ThreadPoolExecutor(max_workers=5) as executor:
+    # Chỉ chạy 3 luồng để máy chủ không đánh dấu Spam dẫn tới mất nửa sau video
+    with ThreadPoolExecutor(max_workers=3) as executor:
         results = list(executor.map(generate_single_tts, tasks))
     
     results.sort(key=lambda x: x[0])
@@ -180,7 +198,7 @@ def build_audio_ffmpeg_parallel(subtitles, voice, output_audio_path):
     for idx, start_sec, temp_speech_file in results:
         if temp_speech_file:
             temp_files.append(temp_speech_file)
-            delay_ms = int(start_sec * 1000)
+            delay_ms = max(1, int(start_sec * 1000)) # Tránh lỗi adelay=0
             file_input_idx = len(temp_files) - 1
             inputs.extend(["-i", temp_speech_file])
             filter_complex_parts.append(f"[{file_input_idx}:a]adelay={delay_ms}|{delay_ms}[a{file_input_idx}]")
@@ -189,17 +207,25 @@ def build_audio_ffmpeg_parallel(subtitles, voice, output_audio_path):
         return False
 
     mix_inputs = "".join([f"[a{i}]" for i in range(len(filter_complex_parts))])
-    filter_complex_str = ";".join(filter_complex_parts) + f";{mix_inputs}amix=inputs={len(filter_complex_parts)}:dropout_transition=0[outa]"
+    # normalize=0 giúp giữ nguyên 100% âm lượng giọng đọc, không bị nhỏ dần
+    filter_complex_str = ";".join(filter_complex_parts) + f";{mix_inputs}amix=inputs={len(filter_complex_parts)}:normalize=0:dropout_transition=0[outa]"
 
-    cmd = ["ffmpeg", "-y"] + inputs + ["-filter_complex", filter_complex_str, "-map", "[outa]", output_audio_path]
+    # Lưu filter script vào file để tránh lỗi giới hạn dòng lệnh quá dài
+    filter_script_file = "audio_filter.txt"
+    with open(filter_script_file, "w", encoding="utf-8") as f:
+        f.write(filter_complex_str)
+
+    cmd = ["ffmpeg", "-y"] + inputs + ["-filter_complex_script", filter_script_file, "-map", "[outa]", output_audio_path]
     subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    
     cleanup_files(*temp_files)
+    cleanup_files(filter_script_file)
     return True
 
 # ==========================================
 # BƯỚC 1: TRÍCH XUẤT PHỤ ĐỀ
 # ==========================================
-st.subheader("Bước 1: Trích xuất & Dịch phụ đề")
+st.subheader("Bước 1: Phân tích Video & Dịch")
 
 if st.button("🚀 Bắt đầu phân tích Video & Dịch"):
     if not api_key:
@@ -275,7 +301,7 @@ if st.button("🚀 Bắt đầu phân tích Video & Dịch"):
 if st.session_state.srt_content:
     st.divider()
     st.subheader("Bước 2: Đối chiếu Tiếng Trung gốc & Xuất Video")
-    st.info("💡 Ô bên dưới hiển thị chữ Trung gốc để bạn đối chiếu. Ứng dụng sẽ xóa chữ Trung, lồng tiếng Việt và ghép vào video hoàn chỉnh!")
+    st.info("💡 Ô bên dưới hiển thị chữ Trung gốc để bạn đối chiếu. Chữ tiếng Việt sẽ tự động làm phình hộp đen để che lấp sạch sẽ chữ Trung ở video.")
     
     edited_srt = st.text_area(
         label="Nội dung phụ đề (Xem chữ Trung gốc và sửa câu Tiếng Việt tại đây):",
@@ -290,14 +316,11 @@ if st.session_state.srt_content:
             output_video_file = "video_hoanchinh.mp4"
             audio_tts_file = "vietnamese_voice.mp3"
 
-            # Lưu file SRT cho người dùng tải về
             vi_only_srt = filter_only_vietnamese_srt(edited_srt)
             with open(srt_filename, "w", encoding="utf-8") as f:
                 f.write(vi_only_srt)
 
-            # Tạo file ASS chuẩn cho FFmpeg xử lý
             create_ass_file(edited_srt, ass_filename, cover_original=cover_original)
-
             input_video_path = st.session_state.temp_video_path
 
             st.info("🎙️ Đang tạo giọng đọc AI lồng tiếng...")
@@ -306,25 +329,47 @@ if st.session_state.srt_content:
 
             st.info("🎬 Đang ghép Phụ đề & Âm thanh vào Video...")
             
+            # Xử lý mức âm lượng theo lựa chọn UI
+            vol_mapping = {
+                "Tắt âm hoàn toàn (0%)": "0.0",
+                "Nhạc nền cực nhỏ (5%)": "0.05",
+                "Vừa phải (15%)": "0.15"
+            }
+            bg_vol = vol_mapping[vol_option]
+            
             if has_audio and os.path.exists(audio_tts_file):
-                # Trộn âm thanh gốc (nhỏ 15%) + âm thanh lồng tiếng
-                cmd_mix = [
-                    "ffmpeg", "-y",
-                    "-i", input_video_path,
-                    "-i", audio_tts_file,
-                    "-filter_complex",
-                    f"[0:a]volume=0.15[bg];[bg][1:a]amix=inputs=2:duration=first[outa];[0:v]subtitles={ass_filename}[outv]",
-                    "-map", "[outv]",
-                    "-map", "[outa]",
-                    "-c:v", "libx264",
-                    "-c:a", "aac",
-                    output_video_file
-                ]
+                if bg_vol == "0.0":
+                    # Xoá hẳn gốc đi chỉ lấy TTS
+                    cmd_mix = [
+                        "ffmpeg", "-y",
+                        "-i", input_video_path,
+                        "-i", audio_tts_file,
+                        "-filter_complex", f"[0:v]subtitles={ass_filename}[outv]",
+                        "-map", "[outv]",
+                        "-map", "1:a",
+                        "-c:v", "libx264",
+                        "-c:a", "aac",
+                        output_video_file
+                    ]
+                else:
+                    # Trộn âm thanh gốc (đã chỉnh nhỏ) + TTS
+                    cmd_mix = [
+                        "ffmpeg", "-y",
+                        "-i", input_video_path,
+                        "-i", audio_tts_file,
+                        "-filter_complex",
+                        f"[0:a]volume={bg_vol}[bg];[bg][1:a]amix=inputs=2:duration=first:normalize=0[outa];[0:v]subtitles={ass_filename}[outv]",
+                        "-map", "[outv]",
+                        "-map", "[outa]",
+                        "-c:v", "libx264",
+                        "-c:a", "aac",
+                        output_video_file
+                    ]
                 
                 try:
                     subprocess.run(cmd_mix, check=True, capture_output=True, text=True)
                 except subprocess.CalledProcessError:
-                    # Nếu video gốc không có tiếng, thay thế hẳn âm thanh bằng tiếng lồng tiếng
+                    # Lỗi nếu video câm (không có luồng audio 0:a), thay bằng âm lồng tiếng
                     cmd_replace_audio = [
                         "ffmpeg", "-y",
                         "-i", input_video_path,
@@ -347,7 +392,7 @@ if st.session_state.srt_content:
                 ]
                 subprocess.run(cmd_no_audio, check=True, capture_output=True, text=True)
 
-            st.success("🎉 Hoàn tất! Video đã ghép đầy đủ Vietsub và Lồng tiếng Việt thành công.")
+            st.success("🎉 Hoàn tất! Video đã ghép đầy đủ Vietsub và Lồng tiếng Việt.")
 
             col_a, col_b = st.columns(2)
             with col_a:
