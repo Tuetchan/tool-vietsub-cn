@@ -8,7 +8,7 @@ import subprocess
 
 st.set_page_config(page_title="Auto Vietsub Tool", page_icon="🎬", layout="wide")
 st.title("🎬 Tool Auto Vietsub Phim Trung Quốc (Gemini 3.5 Flash)")
-st.write("Quét phụ đề siêu tốc với Gemini 3.5 & Tùy chỉnh vị trí hiển thị Vietsub nổi trên chữ gốc")
+st.write("Quét phụ đề siêu tốc & Tự động tạo ô đen che chữ gốc")
 
 # Nhập API Key
 api_key = st.text_input("Nhập Gemini API Key của bạn:", type="password")
@@ -20,10 +20,7 @@ if "temp_video_path" not in st.session_state:
 
 # Tùy chọn hiển thị phụ đề
 st.subheader("⚙️ Tùy chọn hiển thị")
-display_mode = st.radio(
-    "Cách hiển thị phụ đề Vietsub trên video:", 
-    ("Nổi bên trên chữ gốc (Không che)", "Che đè lên chữ gốc (Tạo hộp đen)")
-)
+cover_original = st.checkbox("Bật ô vuông đen bọc quanh phụ đề để che chữ tiếng Trung gốc", value=True)
 
 st.divider()
 st.subheader("📹 Chọn nguồn video")
@@ -82,22 +79,20 @@ def convert_srt_time_to_ass(srt_time_str):
     cs = int(s_parts[1][:2].ljust(2, '0')) if len(s_parts) > 1 else 0
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
-def create_ass_file(srt_text, ass_filename, display_mode):
+def create_ass_file(srt_text, ass_filename, cover_original=True):
     srt_text = srt_text.replace('\r', '')
     blocks = re.split(r'\n\s*\n', srt_text.strip())
     
-    if display_mode == "Che đè lên chữ gốc (Tạo hộp đen)":
-        border_style = "3"
-        box_color = "&H00000000" 
-        outline = "18"
-        margin_v = "15" # Nằm sát đáy để đè
+    if cover_original:
+        border_style = "3"      # 3 = Tạo ô hộp khối (box)
+        box_color = "&H00000000" # Nền đen đặc 100%
+        outline = "18"          # Padding (độ phình) của hộp đen. Càng to thì hộp càng che rộng.
     else:
-        # Chế độ nổi lên trên
-        border_style = "1" 
+        border_style = "1"      # 1 = Chữ thường có viền
         box_color = "&H00000000" 
-        outline = "2" # Viền đen mỏng quanh chữ
-        margin_v = "75" # Đẩy chữ bổng lên cao 75px để nổi bên trên chữ gốc
+        outline = "2"           # Viền đen mỏng 2px
 
+    # MarginV=20 giữ đúng vị trí như trong ảnh của bạn
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: 1280
@@ -106,7 +101,7 @@ WrapStyle: 1
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Arial,28,&H00FFFFFF,&H00000000,{box_color},{box_color},1,0,0,0,100,100,0,0,{border_style},{outline},0,2,10,10,{margin_v},1
+Style: Default,Arial,28,&H00FFFFFF,&H00000000,{box_color},{box_color},1,0,0,0,100,100,0,0,{border_style},{outline},0,2,10,10,20,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"""
@@ -134,9 +129,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\
                 text = re.sub(r'\[(TOP|MID|BOTTOM)\]\s*', '', raw_text_vi, flags=re.IGNORECASE)
                 
                 if text:
-                    # Thêm khoảng trắng để che đè nếu chọn hộp đen
-                    if display_mode == "Che đè lên chữ gốc (Tạo hộp đen)":
-                        text = "     " + text + "     "
+                    # Nếu bật che chữ gốc, thêm nhiều dấu cách (space) vào 2 đầu để dải băng đen dài ra che hết chữ
+                    if cover_original:
+                        text = "       " + text + "       "
                     dialogues.append(f"Dialogue: 0,{start_ass},{end_ass},Default,,0,0,0,,{alignment_tag}{text}")
     
     with open(ass_filename, "w", encoding="utf-8-sig") as f:
@@ -160,7 +155,7 @@ if st.button("🚀 Bắt đầu phân tích Video & Dịch"):
         try:
             genai.configure(api_key=api_key)
             
-            # ĐÃ FIX: Chuyển đổi chuẩn sang model gemini-3.5-flash theo yêu cầu
+            # Sử dụng model gemini-3.5-flash
             model = genai.GenerativeModel('gemini-3.5-flash')
 
             temp_video_path = "temp_video.mp4"
@@ -246,7 +241,7 @@ if st.session_state.srt_content:
             with open(srt_filename, "w", encoding="utf-8") as f:
                 f.write(filter_only_vietnamese_srt(edited_srt))
 
-            has_dialogue = create_ass_file(edited_srt, ass_filename, display_mode)
+            has_dialogue = create_ass_file(edited_srt, ass_filename, cover_original=cover_original)
 
             if not has_dialogue:
                 st.error("❌ Cảnh báo: Tool không đọc được mốc thời gian nào hợp lệ.")
