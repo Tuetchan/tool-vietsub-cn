@@ -11,6 +11,19 @@ st.set_page_config(page_title="Auto Vietsub & Dubbing Studio", page_icon="🎬",
 st.title("🎬 Studio Vietsub & Lồng Tiếng Phim Trung Quốc")
 st.write("Quét phụ đề siêu tốc, chống tràn viền & Ghép Audio tự động như CapCut")
 
+# Cơ chế lưu trữ API Key để không bị mất khi F5
+API_KEY_FILE = "api_key_secret.txt"
+
+def load_api_key():
+    if os.path.exists(API_KEY_FILE):
+        with open(API_KEY_FILE, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    return ""
+
+def save_api_key(key):
+    with open(API_KEY_FILE, "w", encoding="utf-8") as f:
+        f.write(key.strip())
+
 # Tạo thư mục lưu trữ video vĩnh viễn
 OUTPUT_DIR = "output_videos"
 if not os.path.exists(OUTPUT_DIR):
@@ -23,8 +36,13 @@ def get_saved_videos():
     files.sort(key=lambda x: os.path.getmtime(os.path.join(OUTPUT_DIR, x)), reverse=True)
     return files
 
-# Nhập API Key chung cho cả 2 Tab
-api_key = st.text_input("🔑 Nhập Gemini API Key của bạn:", type="password")
+# Nhập API Key (Sẽ tự động điền key cũ nếu đã từng nhập)
+saved_key = load_api_key()
+api_key = st.text_input("🔑 Nhập Gemini API Key của bạn:", type="password", value=saved_key)
+
+if api_key and api_key != saved_key:
+    save_api_key(api_key)
+
 st.divider()
 
 # --- CÁC HÀM XỬ LÝ CHUNG ---
@@ -239,7 +257,7 @@ with tab1:
     t1_audio_option = st.radio("Xử lý âm thanh gốc:",("Giữ nguyên âm thanh", "Đổi Tone/Méo tiếng nhẹ", "Tắt hoàn toàn âm thanh"), key="t1_audio")
 
     st.divider()
-    st.subheader("📹 Chọn nguồn video")
+    st.subheader("📹 Bước 1: Trích xuất Phụ đề AI")
     t1_option = st.radio("Cách tải video:", ("Tải tệp video từ máy", "Dán link Douyin/Xiaohongshu"), key="t1_opt")
 
     t1_uploaded = None
@@ -249,9 +267,15 @@ with tab1:
     else:
         t1_raw_link = st.text_input("Nhập link video:", key="t1_link")
 
+    # ĐÃ THÊM: Tính năng chọn chế độ Quét AI
+    t1_ai_mode = st.radio(
+        "🧠 Chọn chế độ AI:", 
+        ("Quét Tiếng Trung & Dịch Tiếng Việt (Tự động)", "Chỉ chép Tiếng Trung & Thời gian (Dịch thủ công)")
+    )
+
     if st.button("🚀 Bắt đầu phân tích Video & Dịch", key="t1_btn1"):
         if not api_key:
-            st.error("Vui lòng nhập API Key!")
+            st.error("Vui lòng nhập API Key ở trên cùng!")
         else:
             try:
                 genai.configure(api_key=api_key)
@@ -275,32 +299,48 @@ with tab1:
                     uploaded_v = genai.get_file(uploaded_v.name)
 
                 st.info("⚡ AI đang quét...")
-                prompt = """Bạn là Cỗ Máy OCR. ĐỌC CHỮ TRÊN MÀN HÌNH VÀ NGHE ÂM THANH.
-                1. KHÔNG GỘP CÂU. 
-                2. Dòng tiếng Việt KHÔNG QUÁ 15 TỪ.
-                3. Đánh dấu [TOP], [MID], [BOTTOM] đầu câu tiếng Trung.
-                Định dạng SRT:
-                1
-                00:00:01,000 --> 00:00:03,000
-                [BOTTOM] Tiếng Trung
-                Tiếng Việt"""
+                
+                # Phân nhánh Prompt theo lựa chọn của bạn
+                if t1_ai_mode == "Quét Tiếng Trung & Dịch Tiếng Việt (Tự động)":
+                    prompt = """Bạn là Cỗ Máy OCR. ĐỌC CHỮ TRÊN MÀN HÌNH VÀ NGHE ÂM THANH.
+                    1. KHÔNG GỘP CÂU. 
+                    2. Dòng tiếng Việt KHÔNG QUÁ 15 TỪ.
+                    3. Đánh dấu [TOP], [MID], [BOTTOM] đầu câu tiếng Trung.
+                    Định dạng SRT:
+                    1
+                    00:00:01,000 --> 00:00:03,000
+                    [BOTTOM] Tiếng Trung
+                    Tiếng Việt"""
+                else:
+                    prompt = """Bạn là Cỗ Máy OCR. CHỈ ĐỌC CHỮ TRÊN MÀN HÌNH, KHÔNG DỊCH.
+                    1. KHÔNG GỘP 2-3 CÂU VÀO MỘT MỐC THỜI GIAN. Cứ sang câu mới phải tạo mốc mới.
+                    2. Đánh dấu [TOP], [MID], [BOTTOM] đầu câu tiếng Trung.
+                    Định dạng SRT BẮT BUỘC:
+                    1
+                    00:00:01,000 --> 00:00:03,000
+                    [BOTTOM] Tiếng Trung Gốc
+                    [Nhập bản dịch Tiếng Việt vào đây]"""
                 
                 res = model.generate_content([prompt, uploaded_v])
                 st.session_state.t1_srt_content = res.text.strip().replace('```srt', '').replace('```', '').strip()
                 genai.delete_file(uploaded_v.name)
-                st.success("Xong!")
+                st.success("Xong Bước 1!")
             except Exception as e:
                 st.error(f"Lỗi: {e}")
 
-    if st.session_state.t1_srt_content:
-        st.divider()
-        col_t1, col_t2 = st.columns(2)
-        with col_t1: t1_s_off = st.number_input("⏳ Sớm hơn (s):", value=-0.1, step=0.1, key="t1_s_off")
-        with col_t2: t1_e_off = st.number_input("⏳ Nán lại (s):", value=0.5, step=0.1, key="t1_e_off")
-        
-        t1_edited = st.text_area("Chỉnh sửa phụ đề:", value=st.session_state.t1_srt_content, height=300, key="t1_area")
-        
-        if st.button("🎬 Xác nhận & Ghép Vietsub", key="t1_btn2"):
+    # ĐÃ SỬA: Luôn hiển thị Bảng Bước 2 để bạn có thể Dán trực tiếp SRT mà không cần qua Bước 1
+    st.divider()
+    st.subheader("📝 Bước 2: Đối chiếu & Sửa bản dịch (Có thể dán thẳng SRT vào đây)")
+    col_t1, col_t2 = st.columns(2)
+    with col_t1: t1_s_off = st.number_input("⏳ Sớm hơn (s):", value=-0.1, step=0.1, key="t1_s_off")
+    with col_t2: t1_e_off = st.number_input("⏳ Nán lại (s):", value=0.5, step=0.1, key="t1_e_off")
+    
+    t1_edited = st.text_area("Chỉnh sửa phụ đề SRT:", value=st.session_state.t1_srt_content, height=300, key="t1_area")
+    
+    if st.button("🎬 Xác nhận & Ghép Vietsub", key="t1_btn2"):
+        if not t1_edited.strip():
+            st.error("Nội dung phụ đề đang trống! Vui lòng cho AI quét hoặc tự dán SRT vào bảng trên.")
+        else:
             ts = int(time.time())
             out_vid = os.path.join(OUTPUT_DIR, f"vid_t1_{ts}.mp4")
             adj_srt = apply_timing_offsets(t1_edited, t1_s_off, t1_e_off)
@@ -309,15 +349,19 @@ with tab1:
                 f.write(filter_only_vietnamese_srt(adj_srt))
             create_ass_file(adj_srt, "t1_sub.ass", t1_display_mode, t1_outline_size, t1_font_size)
             
-            cmd = ["ffmpeg", "-y", "-i", st.session_state.t1_temp_video_path, "-vf", "subtitles=t1_sub.ass", "-c:v", "libx264"]
-            if t1_audio_option == "Tắt hoàn toàn âm thanh": cmd.append("-an")
-            elif t1_audio_option == "Đổi Tone/Méo tiếng nhẹ": cmd.extend(["-af", "asetrate=44100*1.05,aresample=44100,atempo=1/1.05", "-c:a", "aac"])
-            else: cmd.extend(["-c:a", "copy"])
-            cmd.append(out_vid)
-            
-            subprocess.run(cmd, check=True)
-            st.success("Xong!")
-            st.rerun()
+            # Cần kiểm tra xem có video tạm để ghép không
+            if not st.session_state.t1_temp_video_path or not os.path.exists(st.session_state.t1_temp_video_path):
+                st.error("Chưa có file video nguồn. Hãy tải video ở Bước 1 (dù không bấm quét AI cũng cần phải tải/dán link video).")
+            else:
+                cmd = ["ffmpeg", "-y", "-i", st.session_state.t1_temp_video_path, "-vf", "subtitles=t1_sub.ass", "-c:v", "libx264"]
+                if t1_audio_option == "Tắt hoàn toàn âm thanh": cmd.append("-an")
+                elif t1_audio_option == "Đổi Tone/Méo tiếng nhẹ": cmd.extend(["-af", "asetrate=44100*1.05,aresample=44100,atempo=1/1.05", "-c:a", "aac"])
+                else: cmd.extend(["-c:a", "copy"])
+                cmd.append(out_vid)
+                
+                subprocess.run(cmd, check=True)
+                st.success("Xong!")
+                st.rerun()
 
 # ==========================================
 # TAB 2: STUDIO LỒNG TIẾNG (DUBBING)
@@ -343,6 +387,11 @@ with tab2:
         t2_uploaded = st.file_uploader("Tải video lên:", type=["mp4", "mov"], key="t2_up")
 
     st.subheader("2️⃣ Quét Phụ Đề Gốc (Chỉ đọc chữ)")
+    t2_ai_mode = st.radio(
+        "🧠 Chọn chế độ AI lồng tiếng:", 
+        ("Quét Tiếng Trung & Dịch Tiếng Việt (Tự động)", "Chỉ chép Tiếng Trung & Thời gian (Dịch thủ công)")
+    )
+    
     if st.button("🚀 Quét Phụ Đề (OCR)", key="t2_btn1"):
         if not api_key:
             st.error("Nhập API Key trước!")
@@ -367,14 +416,25 @@ with tab2:
                     uploaded_v = genai.get_file(uploaded_v.name)
 
                 st.info("⚡ Đang quét Text (Không nghe âm thanh)...")
-                prompt = """Bạn là Cỗ Máy OCR. CHỈ ĐỌC CHỮ TRÊN MÀN HÌNH, BỎ QUA HOÀN TOÀN ÂM THANH.
-                1. KHÔNG GỘP CÂU.
-                2. Dòng dịch tiếng Việt ngắn gọn.
-                Định dạng SRT chuẩn:
-                1
-                00:00:01,000 --> 00:00:03,000
-                [BOTTOM] Tiếng Trung
-                Tiếng Việt"""
+                
+                if t2_ai_mode == "Quét Tiếng Trung & Dịch Tiếng Việt (Tự động)":
+                    prompt = """Bạn là Cỗ Máy OCR. CHỈ ĐỌC CHỮ TRÊN MÀN HÌNH, BỎ QUA HOÀN TOÀN ÂM THANH.
+                    1. KHÔNG GỘP CÂU.
+                    2. Dòng dịch tiếng Việt ngắn gọn.
+                    Định dạng SRT chuẩn:
+                    1
+                    00:00:01,000 --> 00:00:03,000
+                    [BOTTOM] Tiếng Trung
+                    Tiếng Việt"""
+                else:
+                    prompt = """Bạn là Cỗ Máy OCR. CHỈ ĐỌC CHỮ TRÊN MÀN HÌNH, KHÔNG DỊCH.
+                    1. KHÔNG GỘP 2-3 CÂU VÀO MỘT MỐC THỜI GIAN.
+                    2. Đánh dấu [TOP], [MID], [BOTTOM] đầu câu tiếng Trung.
+                    Định dạng SRT BẮT BUỘC:
+                    1
+                    00:00:01,000 --> 00:00:03,000
+                    [BOTTOM] Tiếng Trung Gốc
+                    [Nhập bản dịch Tiếng Việt vào đây]"""
                 
                 res = model.generate_content([prompt, uploaded_v])
                 st.session_state.t2_srt_content = res.text.strip().replace('```srt', '').replace('```', '').strip()
@@ -383,18 +443,21 @@ with tab2:
             except Exception as e:
                 st.error(f"Lỗi: {e}")
 
-    if st.session_state.t2_srt_content:
-        st.divider()
-        st.subheader("3️⃣ Chỉnh sửa Dịch thuật & Tải Audio")
-        
-        t2_edited = st.text_area("Bảng 1: Sửa chữ & Thời gian (SRT):", value=st.session_state.t2_srt_content, height=250, key="t2_area")
-        
-        st.info("Bảng 2: Tải lên các file Audio lồng tiếng (Tên file theo thứ tự vd: 1.mp3, 2.mp3...). Tool sẽ tự khớp với các câu dịch ở trên.")
-        t2_audios = st.file_uploader("Tải lên danh sách Audio lồng tiếng:", type=["mp3", "wav", "m4a"], accept_multiple_files=True, key="t2_audios")
-        
-        st.subheader("4️⃣ Bảng Tổng Hợp & Mix Âm Thanh")
-        
-        if st.button("🔄 Tạo Bảng Kết Hợp"):
+    # ĐÃ SỬA: Bảng Bước 3 ở tab Lồng tiếng cũng luôn được hiển thị
+    st.divider()
+    st.subheader("3️⃣ Chỉnh sửa Dịch thuật & Tải Audio")
+    
+    t2_edited = st.text_area("Bảng 1: Sửa chữ & Thời gian (SRT):", value=st.session_state.t2_srt_content, height=250, key="t2_area")
+    
+    st.info("Bảng 2: Tải lên các file Audio lồng tiếng (Tên file theo thứ tự vd: 1.mp3, 2.mp3...). Tool sẽ tự khớp với các câu dịch ở trên.")
+    t2_audios = st.file_uploader("Tải lên danh sách Audio lồng tiếng:", type=["mp3", "wav", "m4a"], accept_multiple_files=True, key="t2_audios")
+    
+    st.subheader("4️⃣ Bảng Tổng Hợp & Mix Âm Thanh")
+    
+    if st.button("🔄 Tạo Bảng Kết Hợp"):
+        if not t2_edited.strip():
+            st.error("Bảng SRT trống, không thể kết hợp!")
+        else:
             parsed_data = parse_srt_to_dict(t2_edited)
             sorted_audios = sorted(t2_audios, key=lambda x: x.name) if t2_audios else []
             
@@ -410,22 +473,27 @@ with tab2:
             
             df = pd.DataFrame(table_data)
             st.table(df)
-            
-        st.markdown("**🔊 Tùy chỉnh Âm lượng & Phụ đề:**")
-        col_v1, col_v2 = st.columns(2)
-        with col_v1:
-            orig_vol = st.slider("Âm lượng Video Gốc (%) - Làm nhạc nền", 0, 100, 10)
-        with col_v2:
-            dub_vol = st.slider("Âm lượng Giọng Lồng Tiếng (%)", 0, 200, 100)
-            
-        col_v3, col_v4 = st.columns(2)
-        with col_v3:
-            t2_display_mode = st.radio("Hiển thị Sub:", ("Che đè lên chữ gốc (Tạo hộp đen)", "Nổi bên trên chữ gốc (Không che)"), key="t2_mode")
-        with col_v4:
-            t2_font = st.number_input("Cỡ chữ:", value=28, key="t2_font")
-            t2_outline = st.number_input("Hộp đen:", value=2, key="t2_outline")
+        
+    st.markdown("**🔊 Tùy chỉnh Âm lượng & Phụ đề:**")
+    col_v1, col_v2 = st.columns(2)
+    with col_v1:
+        orig_vol = st.slider("Âm lượng Video Gốc (%) - Làm nhạc nền", 0, 100, 10)
+    with col_v2:
+        dub_vol = st.slider("Âm lượng Giọng Lồng Tiếng (%)", 0, 200, 100)
+        
+    col_v3, col_v4 = st.columns(2)
+    with col_v3:
+        t2_display_mode = st.radio("Hiển thị Sub:", ("Che đè lên chữ gốc (Tạo hộp đen)", "Nổi bên trên chữ gốc (Không che)"), key="t2_mode")
+    with col_v4:
+        t2_font = st.number_input("Cỡ chữ:", value=28, key="t2_font")
+        t2_outline = st.number_input("Hộp đen:", value=2, key="t2_outline")
 
-        if st.button("🎬 KẾT HỢP & XUẤT VIDEO LỒNG TIẾNG", type="primary"):
+    if st.button("🎬 KẾT HỢP & XUẤT VIDEO LỒNG TIẾNG", type="primary"):
+        if not t2_edited.strip():
+            st.error("Bảng SRT đang trống! Hãy quét AI hoặc dán SRT của bạn vào Bước 3.")
+        elif not st.session_state.t2_temp_video_path or not os.path.exists(st.session_state.t2_temp_video_path):
+            st.error("Video chưa được xử lý vào bộ nhớ tạm! Bạn hãy ấn tải/chọn video ở Bước 1.")
+        else:
             try:
                 st.info("Đang xử lý Audio và Video...")
                 parsed_data = parse_srt_to_dict(t2_edited)
@@ -463,7 +531,6 @@ with tab2:
                         
                         delay_ms = parsed_data[i]['start_ms']
                         idx = i + 1
-                        # normalize=0 giữ nguyên âm lượng không bị giảm khi mix nhiều track
                         filter_complex += f"[{idx}:a]adelay={delay_ms}|{delay_ms},volume={dub_vol/100.0}[a{idx}];"
                         mix_inputs += f"[a{idx}]"
                         
