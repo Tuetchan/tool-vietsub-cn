@@ -8,9 +8,9 @@ import subprocess
 
 st.set_page_config(page_title="Auto Vietsub Tool", page_icon="🎬", layout="wide")
 st.title("🎬 Tool Auto Vietsub Phim Trung Quốc (Gemini 3.5 Flash)")
-st.write("Quét phụ đề siêu tốc với Gemini 3.5 & Tùy chỉnh độ to nhỏ của nền đen")
+st.write("Quét phụ đề siêu tốc, không gộp câu & Chống tràn viền tự động")
 
-# --- ĐÃ THÊM: Tạo thư mục lưu trữ video vĩnh viễn ---
+# Tạo thư mục lưu trữ video vĩnh viễn
 OUTPUT_DIR = "output_videos"
 if not os.path.exists(OUTPUT_DIR):
     os.makedirs(OUTPUT_DIR)
@@ -24,17 +24,18 @@ if "temp_video_path" not in st.session_state:
     st.session_state.temp_video_path = ""
 
 # Tùy chọn hiển thị phụ đề
-st.subheader("⚙️ Tùy chọn hiển thị")
-display_mode = st.radio(
-    "Cách hiển thị phụ đề Vietsub trên video:", 
-    ("Nổi bên trên chữ gốc (Không che)", "Che đè lên chữ gốc (Tạo hộp đen)")
-)
+st.subheader("⚙️ Tùy chọn hiển thị & Kích thước")
 
-# Cho phép tùy chỉnh độ to của nền đen trên giao diện
-outline_size = st.number_input(
-    "Độ dày/to của hộp nền đen (Mặc định: 2. Tăng số này lên để nền đen phình to ra che chữ tốt hơn):", 
-    min_value=0, max_value=50, value=2, step=1
-)
+col_opt1, col_opt2 = st.columns(2)
+with col_opt1:
+    display_mode = st.radio(
+        "Cách hiển thị phụ đề:", 
+        ("Che đè lên chữ gốc (Tạo hộp đen)", "Nổi bên trên chữ gốc (Không che)")
+    )
+with col_opt2:
+    # ĐÃ THÊM: Cho phép chỉnh cỡ chữ trực tiếp
+    font_size = st.number_input("🔠 Cỡ chữ Tiếng Việt (Mặc định: 28):", min_value=10, max_value=100, value=28, step=2)
+    outline_size = st.number_input("⬛ Độ to của hộp đen nền (Mặc định: 2):", min_value=0, max_value=50, value=2, step=1)
 
 st.divider()
 st.subheader("📹 Chọn nguồn video")
@@ -62,7 +63,6 @@ def extract_clean_url(text):
         return url_match.group(0)
     return text.strip()
 
-# HÀM: Tự động cộng/trừ thời gian (sớm lên, trễ đi)
 def adjust_time_str(time_str, offset_sec):
     time_str = time_str.replace(',', '.')
     parts = time_str.split(':')
@@ -84,7 +84,6 @@ def adjust_time_str(time_str, offset_sec):
     
     return f"{new_h:02d}:{new_m:02d}:{new_s:06.3f}".replace('.', ',')
 
-# HÀM: Áp dụng thay đổi thời gian cho toàn bộ file phụ đề
 def apply_timing_offsets(srt_text, start_offset, end_offset):
     blocks = re.split(r'\n\s*\n', srt_text.strip())
     new_blocks = []
@@ -130,8 +129,28 @@ def convert_srt_time_to_ass(srt_time_str):
     cs = int(s_parts[1][:2].ljust(2, '0')) if len(s_parts) > 1 else 0
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
-# Cập nhật hàm tạo ASS nhận thêm tham số outline_size
-def create_ass_file(srt_text, ass_filename, display_mode, outline_size):
+# HÀM MỚI: Tự động ngắt dòng nếu chữ quá to hoặc câu quá dài (Chống tràn viền)
+def wrap_text_for_ass(text, font_size):
+    # Tính toán số lượng ký tự tối đa trên 1 dòng dựa trên cỡ chữ (Màn hình rộng 1280px)
+    max_chars = int(1100 / (font_size * 0.65)) 
+    words = text.split()
+    lines = []
+    current_line = []
+    current_len = 0
+    for word in words:
+        if current_len + len(word) > max_chars and current_line:
+            lines.append(" ".join(current_line))
+            current_line = [word]
+            current_len = len(word)
+        else:
+            current_line.append(word)
+            current_len += len(word) + 1
+    if current_line:
+        lines.append(" ".join(current_line))
+    return lines
+
+# Cập nhật hàm tạo ASS nhận thêm tham số font_size
+def create_ass_file(srt_text, ass_filename, display_mode, outline_size, font_size):
     srt_text = srt_text.replace('\r', '')
     blocks = re.split(r'\n\s*\n', srt_text.strip())
     
@@ -139,10 +158,12 @@ def create_ass_file(srt_text, ass_filename, display_mode, outline_size):
     box_color = "&H00000000" 
     
     if display_mode == "Che đè lên chữ gốc (Tạo hộp đen)":
-        margin_v = "15" # Nằm sát đáy
+        margin_v = "15"
     else:
-        margin_v = "75" # Đẩy chữ bổng lên cao 75px
+        margin_v = "75" 
+        border_style = "1"
 
+    # Đưa biến {font_size} vào Style
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: 1280
@@ -151,7 +172,7 @@ WrapStyle: 1
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Arial,28,&H00FFFFFF,&H00000000,{box_color},{box_color},1,0,0,0,100,100,0,0,{border_style},{outline_size},0,2,10,10,{margin_v},1
+Style: Default,Arial,{font_size},&H00FFFFFF,&H00000000,{box_color},{box_color},1,0,0,0,100,100,0,0,{border_style},{outline_size},0,2,10,10,{margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"""
@@ -179,8 +200,17 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\
                 text = re.sub(r'\[(TOP|MID|BOTTOM)\]\s*', '', raw_text_vi, flags=re.IGNORECASE)
                 
                 if text:
-                    text = r"\h\h\h\h\h\h" + text + r"\h\h\h\h\h\h"
-                    dialogues.append(f"Dialogue: 0,{start_ass},{end_ass},Default,,0,0,0,,{alignment_tag}{text}")
+                    # Gọi hàm cắt dòng chống tràn viền
+                    wrapped_lines = wrap_text_for_ass(text, font_size)
+                    
+                    if display_mode == "Che đè lên chữ gốc (Tạo hộp đen)":
+                        # Thêm khoảng trắng an toàn cho TỪNG DÒNG để hộp đen bao phủ đều
+                        padded_lines = [r"\h\h\h\h" + line + r"\h\h\h\h" for line in wrapped_lines]
+                        final_text = r"\N".join(padded_lines)
+                    else:
+                        final_text = r"\N".join(wrapped_lines)
+                        
+                    dialogues.append(f"Dialogue: 0,{start_ass},{end_ass},Default,,0,0,0,,{alignment_tag}{final_text}")
     
     with open(ass_filename, "w", encoding="utf-8-sig") as f:
         f.write(header + "\n".join(dialogues))
@@ -234,17 +264,20 @@ if st.button("🚀 Bắt đầu phân tích Video & Dịch"):
 
             st.info("⚡ Gemini 3.5 Flash đang quét phụ đề siêu tốc... (Vui lòng đợi vài giây)")
 
+            # ĐÃ FIX: Lệnh AI khắt khe hơn, TUYỆT ĐỐI cấm gộp câu
             prompt = """
             Bạn là một hệ thống Cỗ Máy Quét Phụ Đề (OCR) chuyên nghiệp.
             Nhiệm vụ QUAN TRỌNG NHẤT của bạn là ĐỌC BẰNG MẮT TẤT CẢ CÁC CHỮ (hardsub) xuất hiện trên màn hình video.
 
-            QUY TẮC QUÉT CHỮ (TUYỆT ĐỐI TUÂN THỦ):
-            1. ƯU TIÊN SỐ 1: Hãy nhìn xuống DƯỚI ĐÁY màn hình, quét từng giây một. BẤT CỨ LÚC NÀO CÓ CHỮ TRUNG QUỐC HIỆN LÊN, bạn BẮT BUỘC phải ghi lại chữ đó và mốc thời gian. TUYỆT ĐỐI KHÔNG ĐƯỢC BỎ SÓT!
-            2. VỊ TRÍ CHỮ: 
+            QUY TẮC CẮT CÂU (QUAN TRỌNG TỐI THƯỢNG):
+            1. TUYỆT ĐỐI KHÔNG GỘP 2-3 CÂU VÀO MỘT MỐC THỜI GIAN. 
+            2. Cứ nhân vật ngắt giọng, hoặc màn hình chuyển sang câu chữ tiếng Trung mới, BẠN PHẢI TẠO MỘT KHỐI THỜI GIAN MỚI (Khối SRT mới).
+            3. Một dòng dịch tiếng Việt KHÔNG ĐƯỢC DÀI QUÁ 15 TỪ. Nếu quá dài, hãy cắt đôi ra làm 2 mốc thời gian nối tiếp nhau.
+
+            QUY TẮC VỊ TRÍ CHỮ: 
                - Chữ nằm ở trên đỉnh: Chèn [TOP] vào đầu câu tiếng Trung.
                - Chữ nằm ở giữa: Chèn [MID] vào đầu câu tiếng Trung.
                - Chữ nằm ở dưới đáy: Chèn [BOTTOM] vào đầu câu tiếng Trung.
-            3. TRƯỜNG HỢP KHÔNG CÓ CHỮ: Nếu màn hình hoàn toàn trống trơn không có chữ, bạn mới chuyển sang nghe giọng nói để dịch. Chèn [BOTTOM] vào đầu câu gốc.
             
             ĐỊNH DẠNG ĐẦU RA BẮT BUỘC (SRT):
             1
@@ -252,7 +285,7 @@ if st.button("🚀 Bắt đầu phân tích Video & Dịch"):
             [BOTTOM] Tiếng Trung Gốc
             Bản dịch Tiếng Việt
 
-            (Tuyệt đối không bỏ qua phần Giờ (00:) trong thời gian. Không thêm các giải thích thừa thãi).
+            (Tuyệt đối không bỏ qua phần Giờ (00:) trong thời gian).
             """
 
             response = model.generate_content([prompt, uploaded_video])
@@ -272,12 +305,12 @@ if st.session_state.srt_content:
     st.divider()
     st.subheader("Bước 2: Đối chiếu Tiếng Trung gốc & Sửa bản dịch Tiếng Việt")
     
-    st.markdown("⏱ **Tùy chỉnh thời gian xuất hiện (Dành cho video bị lệch nhịp):**")
+    st.markdown("⏱ **Tùy chỉnh thời gian xuất hiện (Chỉnh chi tiết đến 0.1 giây):**")
     col_t1, col_t2 = st.columns(2)
     with col_t1:
-        start_offset = st.number_input("⏳ Bắt đầu (giây):", value=-1.0, step=0.5, help="Số âm (-1) giúp chữ hiện ra SỚM HƠN 1 giây.")
+        start_offset = st.number_input("⏳ Bắt đầu (giây):", value=-0.1, step=0.1, format="%.2f", help="Số âm (vd: -0.5) giúp chữ hiện ra SỚM HƠN.")
     with col_t2:
-        end_offset = st.number_input("⏳ Kết thúc (giây):", value=2.0, step=0.5, help="Số dương (+2) giúp chữ nằm lại trên màn hình LÂU HƠN 2 giây.")
+        end_offset = st.number_input("⏳ Kết thúc (giây):", value=0.5, step=0.1, format="%.2f", help="Số dương (vd: 0.5) giúp chữ nán lại LÂU HƠN.")
     
     edited_srt = st.text_area(
         label="Nội dung phụ đề (Bạn có thể xem chữ Trung gốc và chỉnh sửa câu tiếng Việt):",
@@ -290,7 +323,6 @@ if st.session_state.srt_content:
             srt_filename = "phu_de_vietsub.srt"
             ass_filename = "phu_de_vietsub.ass"
             
-            # ĐÃ SỬA: Đặt tên file video duy nhất dựa trên thời gian để lưu trữ
             timestamp = int(time.time())
             output_video_file = os.path.join(OUTPUT_DIR, f"video_vietsub_{timestamp}.mp4")
 
@@ -299,7 +331,8 @@ if st.session_state.srt_content:
             with open(srt_filename, "w", encoding="utf-8") as f:
                 f.write(filter_only_vietnamese_srt(adjusted_srt))
 
-            has_dialogue = create_ass_file(adjusted_srt, ass_filename, display_mode, outline_size)
+            # TRUYỀN BIẾN FONT_SIZE VÀO ĐÂY
+            has_dialogue = create_ass_file(adjusted_srt, ass_filename, display_mode, outline_size, font_size)
 
             if not has_dialogue:
                 st.error("❌ Cảnh báo: Tool không đọc được mốc thời gian nào hợp lệ.")
@@ -336,7 +369,6 @@ if st.session_state.srt_content:
                             mime="video/mp4"
                         )
                 
-                # Cập nhật lại giao diện để hiển thị video mới trong danh sách
                 st.rerun()
 
         except subprocess.CalledProcessError as e:
@@ -351,12 +383,10 @@ st.divider()
 st.subheader("📁 Danh sách Video đã tạo")
 st.write("Các video hiển thị ở đây sẽ không bị mất kể cả khi bạn F5 trang. Bạn có thể tải lại hoặc xóa chúng đi.")
 
-# Hàm quét và lấy danh sách video đã lưu trong thư mục
 def get_saved_videos():
     if not os.path.exists(OUTPUT_DIR):
         return []
     files = [f for f in os.listdir(OUTPUT_DIR) if f.endswith('.mp4')]
-    # Sắp xếp để video mới làm xong nằm trên cùng
     files.sort(key=lambda x: os.path.getmtime(os.path.join(OUTPUT_DIR, x)), reverse=True)
     return files
 
@@ -366,7 +396,6 @@ if saved_videos:
     for vid_file in saved_videos:
         vid_path = os.path.join(OUTPUT_DIR, vid_file)
         
-        # Chia cột để hiển thị: Tên video | Nút Tải | Nút Xóa
         col_name, col_dl, col_del = st.columns([6, 2, 2])
         
         with col_name:
@@ -379,14 +408,14 @@ if saved_videos:
                     data=f,
                     file_name=vid_file,
                     mime="video/mp4",
-                    key=f"dl_{vid_file}" # Đặt key độc nhất để không bị lỗi Streamlit
+                    key=f"dl_{vid_file}"
                 )
                 
         with col_del:
             if st.button("❌ Xóa", key=f"del_{vid_file}"):
                 try:
                     os.remove(vid_path)
-                    st.rerun() # F5 lại trang để cập nhật danh sách
+                    st.rerun()
                 except Exception as e:
                     st.error(f"Không thể xóa file: {e}")
 else:
