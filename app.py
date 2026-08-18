@@ -1,5 +1,3 @@
-0.58 复制打开抖音，看看【月月云创的作品】系统让我做一个顶级反派，欺负龙傲天男主，可是...... https://v.douyin.com/O6EVMCBWQ8k/ :2pm 02/01 reB:/ z@t.RX 
-
 import streamlit as st
 import yt_dlp
 import os
@@ -10,7 +8,7 @@ import subprocess
 
 st.set_page_config(page_title="Auto Vietsub Tool", page_icon="🎬", layout="wide")
 st.title("🎬 Tool Auto Vietsub Phim Trung Quốc (Gemini 3.5 Flash)")
-st.write("Quét phụ đề siêu tốc với Gemini 3.5 & Tùy chỉnh độ to nhỏ của nền đen")
+st.write("Dải đen che chữ thông minh (Hiện trước chữ, ẩn sau chữ)")
 
 # Nhập API Key
 api_key = st.text_input("Nhập Gemini API Key của bạn:", type="password")
@@ -24,12 +22,11 @@ if "temp_video_path" not in st.session_state:
 st.subheader("⚙️ Tùy chọn hiển thị")
 display_mode = st.radio(
     "Cách hiển thị phụ đề Vietsub trên video:", 
-    ("Nổi bên trên chữ gốc (Không che)", "Che đè lên chữ gốc (Tạo hộp đen)")
+    ("Che đè lên chữ gốc (Dải đen hiện ra trước chữ)", "Nổi bên trên chữ gốc (Không có dải đen)")
 )
 
-# ĐÃ THÊM: Cho phép tùy chỉnh độ to của nền đen trên giao diện
 outline_size = st.number_input(
-    "Độ dày/to của hộp nền đen (Mặc định: 2. Tăng số này lên để nền đen phình to ra che chữ tốt hơn):", 
+    "Độ dày/to của dải nền đen (Mặc định: 2. Tăng số này lên để nền đen phình to ra che chữ tốt hơn):", 
     min_value=0, max_value=50, value=2, step=1
 )
 
@@ -81,7 +78,6 @@ def adjust_time_str(time_str, offset_sec):
     
     return f"{new_h:02d}:{new_m:02d}:{new_s:06.3f}".replace('.', ',')
 
-# HÀM: Áp dụng thay đổi thời gian cho toàn bộ file phụ đề
 def apply_timing_offsets(srt_text, start_offset, end_offset):
     blocks = re.split(r'\n\s*\n', srt_text.strip())
     new_blocks = []
@@ -127,18 +123,18 @@ def convert_srt_time_to_ass(srt_time_str):
     cs = int(s_parts[1][:2].ljust(2, '0')) if len(s_parts) > 1 else 0
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
-# Cập nhật hàm tạo ASS nhận thêm tham số outline_size
-def create_ass_file(srt_text, ass_filename, display_mode, outline_size):
+# HÀM MỚI: Tách nền đen (Lớp 0) và Chữ (Lớp 1), Nền đen hiện trước và biến mất sau
+def create_ass_file(srt_text, ass_filename, display_mode, outline_size, box_early, box_late):
     srt_text = srt_text.replace('\r', '')
     blocks = re.split(r'\n\s*\n', srt_text.strip())
     
-    border_style = "3"       
+    border_style = "1"       
     box_color = "&H00000000" 
     
-    if display_mode == "Che đè lên chữ gốc (Tạo hộp đen)":
-        margin_v = "15" # Nằm sát đáy
+    if display_mode == "Che đè lên chữ gốc (Dải đen hiện ra trước chữ)":
+        margin_v = "15"
     else:
-        margin_v = "75" # Đẩy chữ bổng lên cao 75px
+        margin_v = "75" 
 
     header = f"""[Script Info]
 ScriptType: v4.00+
@@ -154,11 +150,13 @@ Style: Default,Arial,28,&H00FFFFFF,&H00000000,{box_color},{box_color},1,0,0,0,10
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"""
     
     dialogues = []
+    
     for block in blocks:
         lines = block.strip().split("\n")
         if len(lines) >= 3:
             time_match = re.match(r'((?:\d{1,2}:)?\d{1,2}:\d{1,2}(?:[,\.]\d{1,3})?)\s*-->\s*((?:\d{1,2}:)?\d{1,2}:\d{1,2}(?:[,\.]\d{1,3})?)', lines[1].strip())
             if time_match:
+                # Thời gian của chữ Tiếng Việt
                 start_ass = convert_srt_time_to_ass(time_match.group(1))
                 end_ass = convert_srt_time_to_ass(time_match.group(2))
                 
@@ -176,8 +174,24 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\
                 text = re.sub(r'\[(TOP|MID|BOTTOM)\]\s*', '', raw_text_vi, flags=re.IGNORECASE)
                 
                 if text:
-                    text = r"\h\h\h\h\h\h" + text + r"\h\h\h\h\h\h"
-                    dialogues.append(f"Dialogue: 0,{start_ass},{end_ass},Default,,0,0,0,,{alignment_tag}{text}")
+                    if display_mode == "Che đè lên chữ gốc (Dải đen hiện ra trước chữ)":
+                        # Căn chỉnh thời gian ĐỘC LẬP cho hộp đen (Hiện sớm hơn và nán lại lâu hơn)
+                        box_start_str = adjust_time_str(time_match.group(1), -box_early)
+                        box_end_str = adjust_time_str(time_match.group(2), box_late)
+                        box_start_ass = convert_srt_time_to_ass(box_start_str)
+                        box_end_ass = convert_srt_time_to_ass(box_end_str)
+                        
+                        # Vẽ hộp đen dạng Vector tĩnh (Không bị co giãn)
+                        box_height = 35 + (outline_size * 4)
+                        box_draw = f"{{\\an2\\pos(640,715)\\p1\\1c&H000000&\\bord0\\shad0}}m -1280 -{box_height} l 1280 -{box_height} l 1280 10 l -1280 10{{\\p0}}"
+                        
+                        # Layer 0: Đổ dải đen ra TRƯỚC 1.5s
+                        dialogues.append(f"Dialogue: 0,{box_start_ass},{box_end_ass},Default,,0,0,0,,{box_draw}")
+                        
+                        # Layer 1: Chữ tiếng Việt hiện lên SAU
+                        dialogues.append(f"Dialogue: 1,{start_ass},{end_ass},Default,,0,0,0,,{alignment_tag}{text}")
+                    else:
+                        dialogues.append(f"Dialogue: 1,{start_ass},{end_ass},Default,,0,0,0,,{alignment_tag}{text}")
     
     with open(ass_filename, "w", encoding="utf-8-sig") as f:
         f.write(header + "\n".join(dialogues))
@@ -269,12 +283,14 @@ if st.session_state.srt_content:
     st.divider()
     st.subheader("Bước 2: Đối chiếu Tiếng Trung gốc & Sửa bản dịch Tiếng Việt")
     
-    st.markdown("⏱ **Tùy chỉnh thời gian xuất hiện (Dành cho video bị lệch nhịp):**")
+    st.markdown("⏱ **Tùy chỉnh Nhịp độ Phụ đề & Nền đen:**")
     col_t1, col_t2 = st.columns(2)
     with col_t1:
-        start_offset = st.number_input("⏳ Bắt đầu (giây):", value=-1.0, step=0.5, help="Số âm (-1) giúp chữ hiện ra SỚM HƠN 1 giây.")
+        start_offset = st.number_input("⏳ Chữ Tiếng Việt hiện SỚM HƠN (giây):", value=-1.0, step=0.5)
+        box_early = st.number_input("⬛ Nền đen trải ra TRƯỚC chữ (giây):", value=1.5, step=0.5, help="Dải đen hiện ra sớm để lót đường che chữ Trung Quốc.")
     with col_t2:
-        end_offset = st.number_input("⏳ Kết thúc (giây):", value=2.0, step=0.5, help="Số dương (+2) giúp chữ nằm lại trên màn hình LÂU HƠN 2 giây.")
+        end_offset = st.number_input("⏳ Chữ Tiếng Việt nán lại LÂU HƠN (giây):", value=2.0, step=0.5)
+        box_late = st.number_input("⬛ Nền đen nán lại SAU chữ (giây):", value=0.5, step=0.5, help="Để nền đen không bị biến mất đột ngột khi khoảng cách giữa 2 câu quá ngắn.")
     
     edited_srt = st.text_area(
         label="Nội dung phụ đề (Bạn có thể xem chữ Trung gốc và chỉnh sửa câu tiếng Việt):",
@@ -288,23 +304,26 @@ if st.session_state.srt_content:
             ass_filename = "phu_de_vietsub.ass"
             output_video_file = "video_vietsub_output.mp4"
 
+            # Đẩy thời gian cho chữ Tiếng Việt
             adjusted_srt = apply_timing_offsets(edited_srt, start_offset, end_offset)
 
             with open(srt_filename, "w", encoding="utf-8") as f:
                 f.write(filter_only_vietnamese_srt(adjusted_srt))
 
-            # ĐÃ CẬP NHẬT: Truyền thông số độ to nền đen (outline_size) vào khi tạo file phụ đề
-            has_dialogue = create_ass_file(adjusted_srt, ass_filename, display_mode, outline_size)
+            # Chuyển tham số thời gian riêng biệt của dải đen vào hàm vẽ
+            has_dialogue = create_ass_file(adjusted_srt, ass_filename, display_mode, outline_size, box_early, box_late)
 
             if not has_dialogue:
                 st.error("❌ Cảnh báo: Tool không đọc được mốc thời gian nào hợp lệ.")
             else:
                 st.info("🎬 Đang tiến hành ghép Vietsub tiếng Việt vào video...")
                 
+                ass_abspath = os.path.abspath(ass_filename).replace('\\', '/').replace(':', '\\:')
+                
                 cmd = [
                     "ffmpeg", "-y", 
                     "-i", st.session_state.temp_video_path, 
-                    "-vf", "subtitles=phu_de_vietsub.ass", 
+                    "-vf", f"subtitles='{ass_abspath}'", 
                     "-c:v", "libx264", 
                     "-c:a", "copy",
                     output_video_file
