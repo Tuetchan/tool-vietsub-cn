@@ -16,7 +16,7 @@ api_key = st.text_input("Nhập Gemini API Key (Bắt buộc):", type="password"
 
 # 2. Tùy chọn Phụ đề
 st.subheader("⚙️ 2. Tùy chọn Phụ đề")
-cover_original = st.checkbox("Tạo khung hộp đen đặc 100% để che khuất hoàn toàn chữ tiếng Trung gốc", value=True)
+cover_original = st.checkbox("Tạo hộp đen đặc 100% linh hoạt để che chữ gốc (Sẽ tự động chạy theo chữ)", value=True)
 
 # 3. Nguồn Video
 st.divider()
@@ -52,28 +52,27 @@ def extract_clean_url(text):
     return text.strip()
 
 def filter_only_vietnamese_srt(srt_text):
+    srt_text = srt_text.replace('\r', '')
     cleaned_blocks = []
     blocks = re.split(r'\n\s*\n', srt_text.strip())
     for block in blocks:
         lines = block.strip().split("\n")
         if len(lines) >= 3:
             header = lines[:2]
+            # Lấy dòng cuối (bản dịch) và loại bỏ thẻ định vị vị trí như [TOP], [BOTTOM] để chữ hiển thị sạch
             vi_line = lines[-1].strip()
+            vi_line = re.sub(r'\[(TOP|MID|BOTTOM)\]\s*', '', vi_line, flags=re.IGNORECASE)
             cleaned_blocks.append("\n".join(header + [vi_line]))
         else:
             cleaned_blocks.append(block)
     return "\n\n".join(cleaned_blocks)
 
-# ĐÃ FIX: Hàm xử lý thời gian siêu linh hoạt (Chấp nhận AI viết thiếu Giờ)
 def convert_srt_time_to_ass(srt_time_str):
     srt_time_str = srt_time_str.replace(',', '.')
     parts = srt_time_str.split(':')
-    
-    # Nếu AI viết đủ HH:MM:SS
     if len(parts) == 3:
         h, m = int(parts[0]), int(parts[1])
         s_parts = parts[2].split('.')
-    # Nếu AI viết tắt MM:SS (Thiếu Giờ như trong ảnh của bạn)
     elif len(parts) == 2:
         h, m = 0, int(parts[0])
         s_parts = parts[1].split('.')
@@ -81,19 +80,19 @@ def convert_srt_time_to_ass(srt_time_str):
         return "0:00:00.00"
 
     s = int(s_parts[0])
-    # Xử lý mili-giây
     cs = int(s_parts[1][:2].ljust(2, '0')) if len(s_parts) > 1 else 0
-    
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
+# ĐÃ FIX TẬN GỐC: Nhận diện vị trí từ bản gốc và dịch chuyển hộp đen linh hoạt
 def create_ass_file(srt_text, ass_filename, cover_original=True):
-    vi_srt = filter_only_vietnamese_srt(srt_text)
-    blocks = re.split(r'\n\s*\n', vi_srt.strip())
+    srt_text = srt_text.replace('\r', '')
+    blocks = re.split(r'\n\s*\n', srt_text.strip())
     
     border_style = "3" if cover_original else "1"
     box_color = "&H00000000" if cover_original else "&H00000000" 
     outline = "18" if cover_original else "2"
 
+    # Default an2 (Bottom Center), MarginV=15 để sát đáy
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: 1280
@@ -102,7 +101,7 @@ WrapStyle: 1
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Arial,28,&H00FFFFFF,&H00000000,{box_color},{box_color},1,0,0,0,100,100,0,0,{border_style},{outline},0,2,10,10,25,1
+Style: Default,Arial,28,&H00FFFFFF,&H00000000,{box_color},{box_color},1,0,0,0,100,100,0,0,{border_style},{outline},0,2,10,10,15,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"""
@@ -111,19 +110,33 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\
     for block in blocks:
         lines = block.strip().split("\n")
         if len(lines) >= 3:
-            # ĐÃ FIX: Regex lỏng hơn, cho phép đọc được cả HH:MM:SS hoặc MM:SS
-            time_match = re.match(r'((?:\d{1,2}:)?\d{1,2}:\d{1,2}(?:[,\.]\d{1,3})?)\s*-->\s*((?:\d{1,2}:)?\d{1,2}:\d{1,2}(?:[,\.]\d{1,3})?)', lines[1])
+            time_match = re.match(r'((?:\d{1,2}:)?\d{1,2}:\d{1,2}(?:[,\.]\d{1,3})?)\s*-->\s*((?:\d{1,2}:)?\d{1,2}:\d{1,2}(?:[,\.]\d{1,3})?)', lines[1].strip())
             if time_match:
                 start_ass = convert_srt_time_to_ass(time_match.group(1))
                 end_ass = convert_srt_time_to_ass(time_match.group(2))
-                text_lines = lines[2:]
-                text = r"\N".join(text_lines).strip()
+                
+                raw_text_vi = lines[-1].strip() # Lấy dòng cuối (tiếng việt)
+                raw_text_goc = lines[-2].strip() # Lấy dòng trên nó (tiếng gốc, có chứa tag vị trí)
+                
+                # Quét thẻ vị trí từ văn bản gốc do AI trả về
+                alignment_tag = ""
+                if "[TOP]" in raw_text_goc.upper():
+                    alignment_tag = r"{\an8}" # an8: Top Center
+                elif "[MID]" in raw_text_goc.upper():
+                    alignment_tag = r"{\an5}" # an5: Middle Center
+                else:
+                    alignment_tag = r"{\an2}" # an2: Bottom Center (Mặc định)
+
+                # Dọn sạch thẻ vị trí trong chữ Tiếng Việt để không hiện lên màn hình
+                text = re.sub(r'\[(TOP|MID|BOTTOM)\]\s*', '', raw_text_vi, flags=re.IGNORECASE)
+                
                 if text:
                     if cover_original:
-                        text = r"\h\h\h\h\h" + text + r"\h\h\h\h\h"
-                    dialogues.append(f"Dialogue: 0,{start_ass},{end_ass},Default,,0,0,0,,{text}")
+                        text = "     " + text + "     "
+                    # Chèn alignment_tag vào đầu câu thoại
+                    dialogues.append(f"Dialogue: 0,{start_ass},{end_ass},Default,,0,0,0,,{alignment_tag}{text}")
     
-    with open(ass_filename, "w", encoding="utf-8") as f:
+    with open(ass_filename, "w", encoding="utf-8-sig") as f:
         f.write(header + "\n".join(dialogues))
         
     return len(dialogues) > 0
@@ -166,22 +179,25 @@ if st.button("🚀 Bắt đầu Phân tích & Dịch Video"):
 
             st.info("⚡ AI đang kiểm tra phụ đề màn hình và nghe giọng nói... (Vui lòng chờ khoảng 30s - 1 phút)")
             
+            # --- ĐÃ FIX: Bổ sung lệnh bắt AI phải gán mác vị trí (TOP/MID/BOTTOM) ---
             prompt = """Bạn là một chuyên gia làm phụ đề video. HÃY XEM VIDEO VÀ NGHE CẢ ÂM THANH TRONG VIDEO NÀY.
             
             QUY TẮC BẮT BUỘC (TUYỆT ĐỐI TUÂN THỦ):
             
             TRƯỜNG HỢP 1: NẾU TRÊN MÀN HÌNH CÓ SẴN CHỮ (Hardsub / Phụ đề gốc)
             - BẠN BẮT BUỘC PHẢI lấy đúng mốc thời gian xuất hiện và biến mất của TỪNG KHỐI CHỮ trên màn hình.
-            - Chữ trên màn hình đổi sang câu mới lúc nào, bạn phải ngắt mốc thời gian lúc đó. Khớp 1:1 với chữ gốc trên video.
-            - TUYỆT ĐỐI KHÔNG tự ý chia nhỏ một câu đang hiện trên màn hình, cũng KHÔNG gộp 2 câu xuất hiện ở 2 thời điểm khác nhau vào 1 mốc.
+            - TUYỆT ĐỐI KHAN TRỌNG: Bạn phải XÁC ĐỊNH VỊ TRÍ của dòng chữ gốc đó trên màn hình đang nằm ở đâu.
+               + Nếu chữ ở trên cùng màn hình (đỉnh đầu): Bạn chèn thêm tag [TOP] vào đầu câu gốc.
+               + Nếu chữ nằm chình ình ở giữa màn hình: Bạn chèn thêm tag [MID] vào đầu câu gốc.
+               + Nếu chữ nằm ở dưới đáy màn hình như bình thường: Bạn chèn thêm tag [BOTTOM] vào đầu câu gốc.
 
             TRƯỜNG HỢP 2: NẾU TRÊN MÀN HÌNH KHÔNG CÓ CHỮ (Chỉ nghe lời nói)
-            - Hãy lắng nghe giọng nói và TỰ ĐỘNG CHIA NHỎ thành các đoạn ngắn (tối đa 10-15 từ, khoảng 2-4 giây mỗi đoạn) để phụ đề không bị quá dài. Lời nói đến đâu, cắt mốc thời gian đến đó.
+            - Hãy lắng nghe giọng nói và chia nhỏ thành các đoạn ngắn. Chèn tag [BOTTOM] vào đầu câu gốc.
 
             ĐỊNH DẠNG ĐẦU RA (SRT CHUẨN - TUYỆT ĐỐI KHÔNG VIẾT THIẾU):
             Dòng 1: Số thứ tự
-            Dòng 2: Thời gian BẮT BUỘC phải đủ Giờ:Phút:Giây,Mili-giây (ví dụ 00:00:01,000 --> 00:00:03,500). KHÔNG ĐƯỢC BỎ QUA PHẦN GIỜ ("00:").
-            Dòng 3: Nội dung gốc (Chữ trên màn hình HOẶC lời nói)
+            Dòng 2: Thời gian (ví dụ 00:00:01,000 --> 00:00:03,500)
+            Dòng 3: Nội dung gốc (BẮT BUỘC phải có tag [TOP] hoặc [MID] hoặc [BOTTOM] đứng đầu)
             Dòng 4: Bản dịch Tiếng Việt tương ứng
             
             LƯU Ý: Tuyệt đối không viết gì thêm ngoài định dạng SRT."""
@@ -210,23 +226,22 @@ if st.session_state.srt_content:
             ass_filename = "phu_de_vietsub.ass"
             output_video_file = "video_hoanchinh.mp4"
             
+            # Xuất file SRT sạch (không có tag vị trí) cho người dùng tải về
             with open(srt_filename, "w", encoding="utf-8") as f:
                 f.write(filter_only_vietnamese_srt(edited_srt))
             
+            # Xuất file ASS có chèn mã định vị 
             has_dialogue = create_ass_file(edited_srt, ass_filename, cover_original=cover_original)
             
             if not has_dialogue:
-                st.error("❌ Cảnh báo: Tool không đọc được mốc thời gian nào hợp lệ từ ô văn bản phía trên. Vui lòng kiểm tra lại định dạng mốc thời gian (ví dụ: 00:00:01,000 --> 00:00:03,000)!")
+                st.error("❌ Cảnh báo: Tool không đọc được mốc thời gian nào hợp lệ từ ô văn bản phía trên.")
             else:
                 st.info("🎬 Đang burn (ghép cứng) phụ đề vào Video...")
-                
-                ass_abspath = os.path.abspath(ass_filename)
-                ass_ffmpeg_path = ass_abspath.replace('\\', '/').replace(':', '\\:')
                 
                 cmd = [
                     "ffmpeg", "-y", 
                     "-i", st.session_state.temp_video_path, 
-                    "-vf", f"subtitles='{ass_ffmpeg_path}'", 
+                    "-vf", "subtitles=phu_de_vietsub.ass", 
                     "-c:v", "libx264", 
                     "-c:a", "copy",
                     output_video_file
