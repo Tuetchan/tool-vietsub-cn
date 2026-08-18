@@ -51,6 +51,44 @@ def extract_clean_url(text):
         return url_match.group(0)
     return text.strip()
 
+# HÀM MỚI: Tự động cộng/trừ thời gian (sớm lên, trễ đi)
+def adjust_time_str(time_str, offset_sec):
+    time_str = time_str.replace(',', '.')
+    parts = time_str.split(':')
+    if len(parts) == 3:
+        h, m = int(parts[0]), int(parts[1])
+        s = float(parts[2])
+    elif len(parts) == 2:
+        h, m = 0, int(parts[0])
+        s = float(parts[1])
+    else:
+        return time_str
+    
+    # Cộng trừ giây
+    total_sec = h * 3600 + m * 60 + s + offset_sec
+    total_sec = max(0, total_sec) # Tránh bị âm thời gian
+    
+    new_h = int(total_sec // 3600)
+    new_m = int((total_sec % 3600) // 60)
+    new_s = total_sec % 60
+    
+    return f"{new_h:02d}:{new_m:02d}:{new_s:06.3f}".replace('.', ',')
+
+# HÀM MỚI: Áp dụng thay đổi thời gian cho toàn bộ file phụ đề
+def apply_timing_offsets(srt_text, start_offset, end_offset):
+    blocks = re.split(r'\n\s*\n', srt_text.strip())
+    new_blocks = []
+    for block in blocks:
+        lines = block.strip().split('\n')
+        if len(lines) >= 3:
+            time_match = re.match(r'((?:\d{1,2}:)?\d{1,2}:\d{1,2}(?:[,\.]\d{1,3})?)\s*-->\s*((?:\d{1,2}:)?\d{1,2}:\d{1,2}(?:[,\.]\d{1,3})?)', lines[1].strip())
+            if time_match:
+                new_start = adjust_time_str(time_match.group(1), start_offset)
+                new_end = adjust_time_str(time_match.group(2), end_offset)
+                lines[1] = f"{new_start} --> {new_end}"
+        new_blocks.append('\n'.join(lines))
+    return '\n\n'.join(new_blocks)
+
 def filter_only_vietnamese_srt(srt_text):
     srt_text = srt_text.replace('\r', '')
     cleaned_blocks = []
@@ -86,10 +124,10 @@ def create_ass_file(srt_text, ass_filename, display_mode):
     srt_text = srt_text.replace('\r', '')
     blocks = re.split(r'\n\s*\n', srt_text.strip())
     
-    # ĐÃ SỬA TẠI ĐÂY: Dù bạn chọn chế độ nào, chữ Tiếng Việt cũng sẽ luôn có nền đen to để nổi bật
-    border_style = "3"       # 3 là lệnh đóng hộp (box) cho chữ
-    box_color = "&H00000000" # Mã màu đen tuyền 100%
-    outline = "18"           # Độ dày của hộp đen (làm hộp to ra)
+    # Luôn luôn tạo nền hộp đen to cho chữ tiếng Việt
+    border_style = "3"       
+    box_color = "&H00000000" 
+    outline = "18"           
 
     if display_mode == "Che đè lên chữ gốc (Tạo hộp đen)":
         margin_v = "15" # Nằm sát đáy
@@ -133,7 +171,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\
                 text = re.sub(r'\[(TOP|MID|BOTTOM)\]\s*', '', raw_text_vi, flags=re.IGNORECASE)
                 
                 if text:
-                    # Dùng mã khoảng trắng \h để kéo dài hộp đen sang 2 bên
                     text = r"\h\h\h\h\h\h" + text + r"\h\h\h\h\h\h"
                     dialogues.append(f"Dialogue: 0,{start_ass},{end_ass},Default,,0,0,0,,{alignment_tag}{text}")
     
@@ -157,8 +194,6 @@ if st.button("🚀 Bắt đầu phân tích Video & Dịch"):
     else:
         try:
             genai.configure(api_key=api_key)
-            
-            # ĐÃ FIX: Chuyển đổi chuẩn sang model gemini-3.5-flash theo yêu cầu
             model = genai.GenerativeModel('gemini-3.5-flash')
 
             temp_video_path = "temp_video.mp4"
@@ -229,6 +264,14 @@ if st.session_state.srt_content:
     st.divider()
     st.subheader("Bước 2: Đối chiếu Tiếng Trung gốc & Sửa bản dịch Tiếng Việt")
     
+    # --- ĐÃ THÊM: Giao diện chỉnh thời gian ---
+    st.markdown("⏱ **Tùy chỉnh thời gian xuất hiện (Dành cho video bị lệch nhịp):**")
+    col_t1, col_t2 = st.columns(2)
+    with col_t1:
+        start_offset = st.number_input("⏳ Bắt đầu (giây):", value=-1.0, step=0.5, help="Số âm (-1) giúp chữ hiện ra SỚM HƠN 1 giây.")
+    with col_t2:
+        end_offset = st.number_input("⏳ Kết thúc (giây):", value=2.0, step=0.5, help="Số dương (+2) giúp chữ nằm lại trên màn hình LÂU HƠN 2 giây.")
+    
     edited_srt = st.text_area(
         label="Nội dung phụ đề (Bạn có thể xem chữ Trung gốc và chỉnh sửa câu tiếng Việt):",
         value=st.session_state.srt_content,
@@ -241,10 +284,15 @@ if st.session_state.srt_content:
             ass_filename = "phu_de_vietsub.ass"
             output_video_file = "video_vietsub_output.mp4"
 
-            with open(srt_filename, "w", encoding="utf-8") as f:
-                f.write(filter_only_vietnamese_srt(edited_srt))
+            # 1. Tự động áp dụng lệnh "xuất hiện sớm 1s, nán lại 2s" vào toàn bộ phụ đề
+            adjusted_srt = apply_timing_offsets(edited_srt, start_offset, end_offset)
 
-            has_dialogue = create_ass_file(edited_srt, ass_filename, display_mode)
+            # 2. Lưu file srt sạch sẽ để tải về
+            with open(srt_filename, "w", encoding="utf-8") as f:
+                f.write(filter_only_vietnamese_srt(adjusted_srt))
+
+            # 3. Tạo file ASS từ bản chữ đã chỉnh thời gian
+            has_dialogue = create_ass_file(adjusted_srt, ass_filename, display_mode)
 
             if not has_dialogue:
                 st.error("❌ Cảnh báo: Tool không đọc được mốc thời gian nào hợp lệ.")
