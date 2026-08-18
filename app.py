@@ -8,7 +8,7 @@ import subprocess
 
 st.set_page_config(page_title="Auto Vietsub Tool", page_icon="🎬", layout="wide")
 st.title("🎬 Tool Auto Vietsub Phim Trung Quốc (Gemini 3.5 Flash)")
-st.write("Quét phụ đề siêu tốc với Gemini 3.5 & Tùy chỉnh độ to nhỏ của nền đen")
+st.write("Quét phụ đề siêu tốc với Gemini 3.5 & Tùy chỉnh hộp đen cố định")
 
 # Nhập API Key
 api_key = st.text_input("Nhập Gemini API Key của bạn:", type="password")
@@ -22,14 +22,16 @@ if "temp_video_path" not in st.session_state:
 st.subheader("⚙️ Tùy chọn hiển thị")
 display_mode = st.radio(
     "Cách hiển thị phụ đề Vietsub trên video:", 
-    ("Nổi bên trên chữ gốc (Không che)", "Che đè lên chữ gốc (Tạo hộp đen)")
+    ("Che đè lên chữ gốc (Tạo hộp đen cố định)", "Nổi bên trên chữ gốc (Chữ có viền, không hộp)")
 )
 
-# ĐÃ THÊM: Cho phép tùy chỉnh độ to của nền đen trên giao diện
-outline_size = st.number_input(
-    "Độ dày/to của hộp nền đen (Mặc định: 2. Tăng số này lên để nền đen phình to ra che chữ tốt hơn):", 
-    min_value=0, max_value=50, value=2, step=1
-)
+# ĐÃ FIX TẬN GỐC: Thêm công cụ chỉnh Chiều Cao & Chiều Dài của khối đen
+st.markdown("📏 **Tùy chỉnh kích thước khối đen (Chỉ áp dụng ở chế độ Che đè):**")
+col_box1, col_box2 = st.columns(2)
+with col_box1:
+    outline_size = st.number_input("↕️ Độ cao/dày của khối đen (Mặc định 18):", min_value=0, max_value=100, value=18, step=1)
+with col_box2:
+    box_width = st.number_input("↔️ Độ dài ngang của khối đen (Mặc định 70):", min_value=10, max_value=300, value=70, step=5, help="Tăng số này để dải băng đen vươn dài ra 2 bên màn hình.")
 
 st.divider()
 st.subheader("📹 Chọn nguồn video")
@@ -79,7 +81,6 @@ def adjust_time_str(time_str, offset_sec):
     
     return f"{new_h:02d}:{new_m:02d}:{new_s:06.3f}".replace('.', ',')
 
-# HÀM: Áp dụng thay đổi thời gian cho toàn bộ file phụ đề
 def apply_timing_offsets(srt_text, start_offset, end_offset):
     blocks = re.split(r'\n\s*\n', srt_text.strip())
     new_blocks = []
@@ -125,19 +126,17 @@ def convert_srt_time_to_ass(srt_time_str):
     cs = int(s_parts[1][:2].ljust(2, '0')) if len(s_parts) > 1 else 0
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
-# Cập nhật hàm tạo ASS nhận thêm tham số outline_size
-def create_ass_file(srt_text, ass_filename, display_mode, outline_size):
+# HÀM MỚI: Tách nền đen (Lớp 0) và Chữ (Lớp 1) để nền đen luôn đứng im
+def create_ass_file(srt_text, ass_filename, display_mode, outline_size, box_width):
     srt_text = srt_text.replace('\r', '')
     blocks = re.split(r'\n\s*\n', srt_text.strip())
     
-    border_style = "3"       
-    box_color = "&H00000000" 
-    
-    if display_mode == "Che đè lên chữ gốc (Tạo hộp đen)":
+    if display_mode == "Che đè lên chữ gốc (Tạo hộp đen cố định)":
         margin_v = "15" # Nằm sát đáy
     else:
-        margin_v = "75" # Đẩy chữ bổng lên cao 75px
+        margin_v = "75" # Bổng lên cao
 
+    # Định nghĩa 2 Style: BoxStyle (Để vẽ cục đen) và Default (Để viết chữ trắng)
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: 1280
@@ -146,7 +145,8 @@ WrapStyle: 1
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Arial,28,&H00FFFFFF,&H00000000,{box_color},{box_color},1,0,0,0,100,100,0,0,{border_style},{outline_size},0,2,10,10,{margin_v},1
+Style: BoxStyle,Arial,28,&H00000000,&H00000000,&H00000000,&H00000000,1,0,0,0,100,100,0,0,3,{outline_size},0,2,10,10,{margin_v},1
+Style: Default,Arial,28,&H00FFFFFF,&H00000000,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,2,0,2,10,10,{margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"""
@@ -174,8 +174,14 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\
                 text = re.sub(r'\[(TOP|MID|BOTTOM)\]\s*', '', raw_text_vi, flags=re.IGNORECASE)
                 
                 if text:
-                    text = r"\h\h\h\h\h\h" + text + r"\h\h\h\h\h\h"
-                    dialogues.append(f"Dialogue: 0,{start_ass},{end_ass},Default,,0,0,0,,{alignment_tag}{text}")
+                    if display_mode == "Che đè lên chữ gốc (Tạo hộp đen cố định)":
+                        # Lớp 0: Tạo một dải đen cố định bằng khoảng trắng (luôn giữ nguyên 1 độ dài)
+                        fixed_bg = r"\h" * int(box_width)
+                        dialogues.append(f"Dialogue: 0,{start_ass},{end_ass},BoxStyle,,0,0,0,,{{\\q2}}{alignment_tag}{fixed_bg}")
+                        # Lớp 1: Chữ tiếng Việt đè lên trên dải đen
+                        dialogues.append(f"Dialogue: 1,{start_ass},{end_ass},Default,,0,0,0,,{alignment_tag}{text}")
+                    else:
+                        dialogues.append(f"Dialogue: 1,{start_ass},{end_ass},Default,,0,0,0,,{alignment_tag}{text}")
     
     with open(ass_filename, "w", encoding="utf-8-sig") as f:
         f.write(header + "\n".join(dialogues))
@@ -227,7 +233,7 @@ if st.button("🚀 Bắt đầu phân tích Video & Dịch"):
                 time.sleep(3)
                 uploaded_video = genai.get_file(uploaded_video.name)
 
-            st.info("⚡ Gemini 3.5 Flash đang quét phụ đề siêu tốc... (Vui lòng đợi vài giây)")
+            st.info("⚡ Gemini đang quét phụ đề siêu tốc... (Vui lòng đợi vài giây)")
 
             prompt = """
             Bạn là một hệ thống Cỗ Máy Quét Phụ Đề (OCR) chuyên nghiệp.
@@ -270,9 +276,9 @@ if st.session_state.srt_content:
     st.markdown("⏱ **Tùy chỉnh thời gian xuất hiện (Dành cho video bị lệch nhịp):**")
     col_t1, col_t2 = st.columns(2)
     with col_t1:
-        start_offset = st.number_input("⏳ Bắt đầu (giây):", value=-1.0, step=0.5, help="Số âm (-1) giúp chữ hiện ra SỚM HƠN 1 giây.")
+        start_offset = st.number_input("⏳ Bắt đầu (giây):", value=-1.0, step=0.5)
     with col_t2:
-        end_offset = st.number_input("⏳ Kết thúc (giây):", value=2.0, step=0.5, help="Số dương (+2) giúp chữ nằm lại trên màn hình LÂU HƠN 2 giây.")
+        end_offset = st.number_input("⏳ Kết thúc (giây):", value=2.0, step=0.5)
     
     edited_srt = st.text_area(
         label="Nội dung phụ đề (Bạn có thể xem chữ Trung gốc và chỉnh sửa câu tiếng Việt):",
@@ -291,18 +297,20 @@ if st.session_state.srt_content:
             with open(srt_filename, "w", encoding="utf-8") as f:
                 f.write(filter_only_vietnamese_srt(adjusted_srt))
 
-            # ĐÃ CẬP NHẬT: Truyền thông số độ to nền đen (outline_size) vào khi tạo file phụ đề
-            has_dialogue = create_ass_file(adjusted_srt, ass_filename, display_mode, outline_size)
+            # Chuyển tham số box_width và outline_size vào hàm
+            has_dialogue = create_ass_file(adjusted_srt, ass_filename, display_mode, outline_size, box_width)
 
             if not has_dialogue:
                 st.error("❌ Cảnh báo: Tool không đọc được mốc thời gian nào hợp lệ.")
             else:
                 st.info("🎬 Đang tiến hành ghép Vietsub tiếng Việt vào video...")
                 
+                ass_abspath = os.path.abspath(ass_filename).replace('\\', '/').replace(':', '\\:')
+                
                 cmd = [
                     "ffmpeg", "-y", 
                     "-i", st.session_state.temp_video_path, 
-                    "-vf", "subtitles=phu_de_vietsub.ass", 
+                    "-vf", f"subtitles='{ass_abspath}'", 
                     "-c:v", "libx264", 
                     "-c:a", "copy",
                     output_video_file
