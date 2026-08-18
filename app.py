@@ -64,26 +64,34 @@ def filter_only_vietnamese_srt(srt_text):
             cleaned_blocks.append(block)
     return "\n\n".join(cleaned_blocks)
 
+# ĐÃ FIX: Hàm xử lý thời gian siêu linh hoạt (Chấp nhận AI viết thiếu Giờ)
 def convert_srt_time_to_ass(srt_time_str):
     srt_time_str = srt_time_str.replace(',', '.')
     parts = srt_time_str.split(':')
-    h, m = int(parts[0]), int(parts[1])
-    s_parts = parts[2].split('.')
+    
+    # Nếu AI viết đủ HH:MM:SS
+    if len(parts) == 3:
+        h, m = int(parts[0]), int(parts[1])
+        s_parts = parts[2].split('.')
+    # Nếu AI viết tắt MM:SS (Thiếu Giờ như trong ảnh của bạn)
+    elif len(parts) == 2:
+        h, m = 0, int(parts[0])
+        s_parts = parts[1].split('.')
+    else:
+        return "0:00:00.00"
+
     s = int(s_parts[0])
-    cs = int(s_parts[1][:2]) if len(s_parts) > 1 else 0
+    # Xử lý mili-giây
+    cs = int(s_parts[1][:2].ljust(2, '0')) if len(s_parts) > 1 else 0
+    
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
 def create_ass_file(srt_text, ass_filename, cover_original=True):
     vi_srt = filter_only_vietnamese_srt(srt_text)
     blocks = re.split(r'\n\s*\n', vi_srt.strip())
     
-    # BorderStyle = 3 là dạng hộp khối (box). BorderStyle = 1 là viền mỏng quanh chữ.
     border_style = "3" if cover_original else "1"
-    
-    # ĐÃ FIX: Chuyển màu hộp thành Đen Đặc 100% (&H00000000) thay vì đen mờ.
     box_color = "&H00000000" if cover_original else "&H00000000" 
-    
-    # ĐÃ FIX: Tăng Outline (Độ dày của hộp đen) từ 12 lên 18 để hộp to ra, nuốt trọn chữ Trung Quốc to.
     outline = "18" if cover_original else "2"
 
     header = f"""[Script Info]
@@ -103,7 +111,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\
     for block in blocks:
         lines = block.strip().split("\n")
         if len(lines) >= 3:
-            time_match = re.match(r'(\d{2}:\d{2}:\d{2}(?:[,\.]\d{1,3})?)\s*-->\s*(\d{2}:\d{2}:\d{2}(?:[,\.]\d{1,3})?)', lines[1])
+            # ĐÃ FIX: Regex lỏng hơn, cho phép đọc được cả HH:MM:SS hoặc MM:SS
+            time_match = re.match(r'((?:\d{1,2}:)?\d{1,2}:\d{1,2}(?:[,\.]\d{1,3})?)\s*-->\s*((?:\d{1,2}:)?\d{1,2}:\d{1,2}(?:[,\.]\d{1,3})?)', lines[1])
             if time_match:
                 start_ass = convert_srt_time_to_ass(time_match.group(1))
                 end_ass = convert_srt_time_to_ass(time_match.group(2))
@@ -111,7 +120,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\
                 text = r"\N".join(text_lines).strip()
                 if text:
                     if cover_original:
-                        # ĐÃ FIX: Thêm nhiều khoảng trắng (\h) 2 bên để kéo dài hộp đen sang 2 cạnh.
                         text = r"\h\h\h\h\h" + text + r"\h\h\h\h\h"
                     dialogues.append(f"Dialogue: 0,{start_ass},{end_ass},Default,,0,0,0,,{text}")
     
@@ -170,9 +178,9 @@ if st.button("🚀 Bắt đầu Phân tích & Dịch Video"):
             TRƯỜNG HỢP 2: NẾU TRÊN MÀN HÌNH KHÔNG CÓ CHỮ (Chỉ nghe lời nói)
             - Hãy lắng nghe giọng nói và TỰ ĐỘNG CHIA NHỎ thành các đoạn ngắn (tối đa 10-15 từ, khoảng 2-4 giây mỗi đoạn) để phụ đề không bị quá dài. Lời nói đến đâu, cắt mốc thời gian đến đó.
 
-            ĐỊNH DẠNG ĐẦU RA (SRT CHUẨN):
+            ĐỊNH DẠNG ĐẦU RA (SRT CHUẨN - TUYỆT ĐỐI KHÔNG VIẾT THIẾU):
             Dòng 1: Số thứ tự
-            Dòng 2: Thời gian (Start --> End, ví dụ 00:00:01,000 --> 00:00:03,500)
+            Dòng 2: Thời gian BẮT BUỘC phải đủ Giờ:Phút:Giây,Mili-giây (ví dụ 00:00:01,000 --> 00:00:03,500). KHÔNG ĐƯỢC BỎ QUA PHẦN GIỜ ("00:").
             Dòng 3: Nội dung gốc (Chữ trên màn hình HOẶC lời nói)
             Dòng 4: Bản dịch Tiếng Việt tương ứng
             
