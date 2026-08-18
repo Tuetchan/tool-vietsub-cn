@@ -56,10 +56,9 @@ def filter_only_vietnamese_srt(srt_text):
     blocks = re.split(r'\n\s*\n', srt_text.strip())
     for block in blocks:
         lines = block.strip().split("\n")
-        # Định dạng chuẩn: Dòng 0 (Số TT), Dòng 1 (Thời gian), Dòng 2 (Gốc), Dòng cuối (Bản dịch)
         if len(lines) >= 3:
             header = lines[:2]
-            # Luôn lấy dòng cuối cùng làm dòng tiếng Việt (Bỏ qua ngôn ngữ gốc dù là Trung, Anh, Hàn...)
+            # Lấy dòng cuối cùng (bản dịch)
             vi_line = lines[-1].strip()
             cleaned_blocks.append("\n".join(header + [vi_line]))
         else:
@@ -80,13 +79,15 @@ def create_ass_file(srt_text, ass_filename, cover_original=True):
     blocks = re.split(r'\n\s*\n', vi_srt.strip())
     
     border_style = "3" if cover_original else "1"
-    back_color = "&H80000000" if cover_original else "&H00000000" # Nền đen mờ 50% nếu che chữ
+    back_color = "&H80000000" if cover_original else "&H00000000" 
     outline = "12" if cover_original else "2"
 
+    # Hỗ trợ tự động xuống dòng WrapStyle=1, chống tràn lề nếu câu dịch dài
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: 1280
 PlayResY: 720
+WrapStyle: 1
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
@@ -103,7 +104,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\
             if time_match:
                 start_ass = convert_srt_time_to_ass(time_match.group(1))
                 end_ass = convert_srt_time_to_ass(time_match.group(2))
-                # Lấy trực tiếp văn bản ở các dòng còn lại
                 text_lines = lines[2:]
                 text = r"\N".join(text_lines).strip()
                 if text:
@@ -115,7 +115,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\
         f.write(header + "\n".join(dialogues))
 
 # ==========================================
-# BƯỚC 1: TRÍCH XUẤT PHỤ ĐỀ / LỜI NÓI BẰNG GEMINI
+# BƯỚC 1: TRÍCH XUẤT PHỤ ĐỀ BẰNG GEMINI
 # ==========================================
 if st.button("🚀 Bắt đầu Phân tích & Dịch Video"):
     if not api_key:
@@ -152,21 +152,26 @@ if st.button("🚀 Bắt đầu Phân tích & Dịch Video"):
 
             st.info("⚡ AI đang kiểm tra phụ đề màn hình và nghe giọng nói... (Vui lòng chờ khoảng 30s - 1 phút)")
             
-            # ĐÃ FIX: Yêu cầu AI tự động nghe âm thanh nếu không có chữ
-            prompt = """Bạn là một chuyên gia nhận diện hình ảnh, âm thanh và dịch thuật video.
-            Nhiệm vụ của bạn:
-            1. HÃY XEM VIDEO VÀ NGHE CẢ ÂM THANH TRONG VIDEO NÀY.
-            2. Nếu trên màn hình CÓ PHỤ ĐỀ CHỮ: Hãy đọc chữ, ghi lại mốc thời gian và dịch sang Tiếng Việt.
-            3. Nếu trên màn hình KHÔNG CÓ PHỤ ĐỀ: Hãy NGHE LỜI NÓI (giọng nói) trong video, ghi lại mốc thời gian người đó nói, viết lại nội dung nói và dịch sang Tiếng Việt.
+            # --- ĐÃ FIX: Hướng dẫn AI xử lý rạch ròi 2 trường hợp ---
+            prompt = """Bạn là một chuyên gia làm phụ đề video. HÃY XEM VIDEO VÀ NGHE CẢ ÂM THANH TRONG VIDEO NÀY.
+            
+            QUY TẮC BẮT BUỘC (TUYỆT ĐỐI TUÂN THỦ):
+            
+            TRƯỜNG HỢP 1: NẾU TRÊN MÀN HÌNH CÓ SẴN CHỮ (Hardsub / Phụ đề gốc)
+            - BẠN BẮT BUỘC PHẢI lấy đúng mốc thời gian xuất hiện và biến mất của TỪNG KHỐI CHỮ trên màn hình.
+            - Chữ trên màn hình đổi sang câu mới lúc nào, bạn phải ngắt mốc thời gian lúc đó. Khớp 1:1 với chữ gốc trên video.
+            - TUYỆT ĐỐI KHÔNG tự ý chia nhỏ một câu đang hiện trên màn hình, cũng KHÔNG gộp 2 câu xuất hiện ở 2 thời điểm khác nhau vào 1 mốc.
 
-            LƯU Ý CỰC KỲ QUAN TRỌNG:
-            - BẮT BUỘC trả về kết quả theo chuẩn ĐỊNH DẠNG FILE .SRT:
-              Dòng 1: Số thứ tự
-              Dòng 2: Thời gian (Start --> End, ví dụ 00:00:01,000 --> 00:00:03,500)
-              Dòng 3: Nội dung gốc (chữ trên màn hình HOẶC lời nói gốc nghe được)
-              Dòng 4: Bản dịch Tiếng Việt
-            - BẠN TUYỆT ĐỐI KHÔNG ĐƯỢC BỎ SÓT câu nói/phụ đề nào.
-            - Tuyệt đối không thêm các lời giải thích, không viết thêm mã code, chỉ trả về nội dung SRT thuần túy."""
+            TRƯỜNG HỢP 2: NẾU TRÊN MÀN HÌNH KHÔNG CÓ CHỮ (Chỉ nghe lời nói)
+            - Hãy lắng nghe giọng nói và TỰ ĐỘNG CHIA NHỎ thành các đoạn ngắn (tối đa 10-15 từ, khoảng 2-4 giây mỗi đoạn) để phụ đề không bị quá dài. Lời nói đến đâu, cắt mốc thời gian đến đó.
+
+            ĐỊNH DẠNG ĐẦU RA (SRT CHUẨN):
+            Dòng 1: Số thứ tự
+            Dòng 2: Thời gian (Start --> End, ví dụ 00:00:01,000 --> 00:00:03,500)
+            Dòng 3: Nội dung gốc (Chữ trên màn hình HOẶC lời nói)
+            Dòng 4: Bản dịch Tiếng Việt tương ứng
+            
+            LƯU Ý: Tuyệt đối không viết gì thêm ngoài định dạng SRT."""
 
             generation_config = genai.types.GenerationConfig(max_output_tokens=8192, temperature=0.1)
             response = model.generate_content([prompt, uploaded_video], generation_config=generation_config)
@@ -192,14 +197,12 @@ if st.session_state.srt_content:
             ass_filename = "phu_de_vietsub.ass"
             output_video_file = "video_hoanchinh.mp4"
             
-            # Lưu file SRT và ASS
             with open(srt_filename, "w", encoding="utf-8") as f:
                 f.write(filter_only_vietnamese_srt(edited_srt))
             create_ass_file(edited_srt, ass_filename, cover_original=cover_original)
 
             st.info("🎬 Đang burn (ghép cứng) phụ đề vào Video...")
             
-            # Lệnh FFmpeg giữ nguyên audio gốc
             cmd = [
                 "ffmpeg", "-y", 
                 "-i", st.session_state.temp_video_path, 
