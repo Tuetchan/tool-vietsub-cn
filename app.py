@@ -7,36 +7,30 @@ import re
 import subprocess
 
 st.set_page_config(page_title="Auto Vietsub Tool", page_icon="🎬", layout="wide")
-st.title("🎬 Tool Auto Vietsub Video (Đọc Chữ & Nghe Giọng Nói)")
-st.write("Tự động nhận diện phụ đề hoặc nghe giọng nói -> Dịch thuật bằng Gemini AI -> Xuất video Vietsub hoàn chỉnh")
+st.title("🎬 Tool Auto Vietsub Phim Trung Quốc bằng Gemini")
+st.write("Soi câu dịch với chữ Trung gốc -> Tự động che chữ gốc bất kể vị trí & Ghép đè vào Video")
 
-# 1. Cấu hình AI Dịch thuật
-st.subheader("🔑 1. Cấu hình AI Dịch thuật")
-api_key = st.text_input("Nhập Gemini API Key (Bắt buộc):", type="password")
+# Nhập API Key
+api_key = st.text_input("Nhập Gemini API Key của bạn:", type="password", help="Lấy API Key miễn phí tại Google AI Studio")
 
-# 2. Tùy chọn Phụ đề
-st.subheader("⚙️ 2. Tùy chọn Phụ đề")
-cover_original = st.checkbox("Tạo hộp đen đặc 100% linh hoạt để che chữ gốc (Sẽ tự động chạy theo chữ)", value=True)
-
-# 3. Nguồn Video
-st.divider()
-st.subheader("📹 3. Chọn nguồn video")
-option = st.radio("Chọn cách tải video lên:", ("Tải tệp video từ máy (MP4, MOV,...)", "Dán link Douyin / Xiaohongshu"))
-uploaded_file = None
-raw_video_input = ""
-
-if option == "Tải tệp video từ máy (MP4, MOV,...)":
-    uploaded_file = st.file_uploader("Chọn video từ máy tính:", type=["mp4", "mov", "mkv", "avi", "webm"])
-else:
-    raw_video_input = st.text_input("Nhập link video (hoặc văn bản chia sẻ từ Douyin):")
-
-# Khởi tạo session state
 if "srt_content" not in st.session_state:
     st.session_state.srt_content = ""
 if "temp_video_path" not in st.session_state:
     st.session_state.temp_video_path = ""
 
-# --- CÁC HÀM XỬ LÝ PHỤ ĐỀ ---
+# Tùy chọn che chữ Trung gốc
+cover_original = st.checkbox("Tự động tạo hộp đen đặc che kín chữ Trung Quốc (Tự động bám theo vị trí chữ)", value=True)
+
+option = st.radio("Chọn nguồn video:", ("Tải tệp video từ máy (MP4, MOV,...)", "Dán link Douyin / Xiaohongshu"))
+
+uploaded_file = None
+raw_video_input = ""
+
+if option == "Tải tệp video từ máy (MP4, MOV,...)":
+    uploaded_file = st.file_uploader("Chọn video từ máy tính/điện thoại:", type=["mp4", "mov", "mkv", "avi", "webm"])
+else:
+    raw_video_input = st.text_input("Nhập link video (hoặc văn bản chia sẻ từ Douyin):")
+
 def cleanup_files(*filepaths):
     for path in filepaths:
         if os.path.exists(path):
@@ -51,6 +45,7 @@ def extract_clean_url(text):
         return url_match.group(0)
     return text.strip()
 
+# Hàm lọc chữ Tiếng Việt xuất ra file SRT sạch (để người dùng tải về)
 def filter_only_vietnamese_srt(srt_text):
     srt_text = srt_text.replace('\r', '')
     cleaned_blocks = []
@@ -59,14 +54,15 @@ def filter_only_vietnamese_srt(srt_text):
         lines = block.strip().split("\n")
         if len(lines) >= 3:
             header = lines[:2]
-            # Lấy dòng cuối (bản dịch) và loại bỏ thẻ định vị vị trí như [TOP], [BOTTOM] để chữ hiển thị sạch
             vi_line = lines[-1].strip()
+            # Xóa các tag vị trí để file srt sạch đẹp
             vi_line = re.sub(r'\[(TOP|MID|BOTTOM)\]\s*', '', vi_line, flags=re.IGNORECASE)
             cleaned_blocks.append("\n".join(header + [vi_line]))
         else:
             cleaned_blocks.append(block)
     return "\n\n".join(cleaned_blocks)
 
+# Hàm chuyển đổi thời gian linh hoạt
 def convert_srt_time_to_ass(srt_time_str):
     srt_time_str = srt_time_str.replace(',', '.')
     parts = srt_time_str.split(':')
@@ -83,7 +79,7 @@ def convert_srt_time_to_ass(srt_time_str):
     cs = int(s_parts[1][:2].ljust(2, '0')) if len(s_parts) > 1 else 0
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
-# ĐÃ FIX TẬN GỐC: Nhận diện vị trí từ bản gốc và dịch chuyển hộp đen linh hoạt
+# Hàm tạo file ASS thông minh: Tự dịch chuyển hộp đen lên trên/xuống dưới theo AI
 def create_ass_file(srt_text, ass_filename, cover_original=True):
     srt_text = srt_text.replace('\r', '')
     blocks = re.split(r'\n\s*\n', srt_text.strip())
@@ -92,7 +88,6 @@ def create_ass_file(srt_text, ass_filename, cover_original=True):
     box_color = "&H00000000" if cover_original else "&H00000000" 
     outline = "18" if cover_original else "2"
 
-    # Default an2 (Bottom Center), MarginV=15 để sát đáy
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: 1280
@@ -115,25 +110,24 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\
                 start_ass = convert_srt_time_to_ass(time_match.group(1))
                 end_ass = convert_srt_time_to_ass(time_match.group(2))
                 
-                raw_text_vi = lines[-1].strip() # Lấy dòng cuối (tiếng việt)
-                raw_text_goc = lines[-2].strip() # Lấy dòng trên nó (tiếng gốc, có chứa tag vị trí)
+                raw_text_vi = lines[-1].strip()
+                raw_text_goc = lines[-2].strip()
                 
-                # Quét thẻ vị trí từ văn bản gốc do AI trả về
+                # Quét tag vị trí từ câu tiếng Trung
                 alignment_tag = ""
                 if "[TOP]" in raw_text_goc.upper():
-                    alignment_tag = r"{\an8}" # an8: Top Center
+                    alignment_tag = r"{\an8}" 
                 elif "[MID]" in raw_text_goc.upper():
-                    alignment_tag = r"{\an5}" # an5: Middle Center
+                    alignment_tag = r"{\an5}" 
                 else:
-                    alignment_tag = r"{\an2}" # an2: Bottom Center (Mặc định)
+                    alignment_tag = r"{\an2}"
 
-                # Dọn sạch thẻ vị trí trong chữ Tiếng Việt để không hiện lên màn hình
+                # Xóa tag để không in lên video
                 text = re.sub(r'\[(TOP|MID|BOTTOM)\]\s*', '', raw_text_vi, flags=re.IGNORECASE)
                 
                 if text:
                     if cover_original:
                         text = "     " + text + "     "
-                    # Chèn alignment_tag vào đầu câu thoại
                     dialogues.append(f"Dialogue: 0,{start_ass},{end_ass},Default,,0,0,0,,{alignment_tag}{text}")
     
     with open(ass_filename, "w", encoding="utf-8-sig") as f:
@@ -142,9 +136,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\
     return len(dialogues) > 0
 
 # ==========================================
-# BƯỚC 1: TRÍCH XUẤT PHỤ ĐỀ BẰNG GEMINI
+# BƯỚC 1: TRÍCH XUẤT PHỤ ĐỀ (MODEL GEMINI)
 # ==========================================
-if st.button("🚀 Bắt đầu Phân tích & Dịch Video"):
+st.subheader("Bước 1: Trích xuất & Dịch phụ đề")
+
+if st.button("🚀 Bắt đầu phân tích Video & Dịch"):
     if not api_key:
         st.error("Vui lòng nhập Gemini API Key!")
     elif option == "Tải tệp video từ máy (MP4, MOV,...)" and not uploaded_file:
@@ -154,9 +150,11 @@ if st.button("🚀 Bắt đầu Phân tích & Dịch Video"):
     else:
         try:
             genai.configure(api_key=api_key)
-            model = genai.GenerativeModel('gemini-2.5-flash')
+            # Model chuẩn của Google là gemini-1.5-flash
+            model = genai.GenerativeModel('gemini-1.5-flash')
+
             temp_video_path = "temp_video.mp4"
-            cleanup_files(temp_video_path, "phu_de_vietsub.srt", "phu_de_vietsub.ass", "video_hoanchinh.mp4")
+            cleanup_files(temp_video_path, "phu_de_vietsub.srt", "phu_de_vietsub.ass", "video_vietsub_output.mp4")
 
             if option == "Tải tệp video từ máy (MP4, MOV,...)":
                 file_ext = uploaded_file.name.split('.')[-1]
@@ -165,79 +163,83 @@ if st.button("🚀 Bắt đầu Phân tích & Dịch Video"):
                     f.write(uploaded_file.getbuffer())
             else:
                 clean_url = extract_clean_url(raw_video_input)
-                ydl_opts = {'format': 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best', 'outtmpl': temp_video_path, 'quiet': True}
+                ydl_opts = {
+                    'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+                    'outtmpl': temp_video_path,
+                    'quiet': True,
+                    'no_warnings': True,
+                }
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     ydl.download([clean_url])
 
             st.session_state.temp_video_path = temp_video_path
-            
-            st.info("📹 Đang tải video lên AI để phân tích hình ảnh và âm thanh...")
+
+            st.info("Đang tải Video lên AI...")
             uploaded_video = genai.upload_file(path=temp_video_path)
+            
             while uploaded_video.state.name == "PROCESSING":
                 time.sleep(3)
                 uploaded_video = genai.get_file(uploaded_video.name)
 
-            st.info("⚡ AI đang kiểm tra phụ đề màn hình và nghe giọng nói... (Vui lòng chờ khoảng 30s - 1 phút)")
+            prompt = """
+            Bạn là chuyên gia làm phụ đề phim.
+            Hãy nghe giọng nói và nhìn chữ trên màn hình video để tạo phụ đề.
             
-            # --- ĐÃ FIX: Bổ sung lệnh bắt AI phải gán mác vị trí (TOP/MID/BOTTOM) ---
-            prompt = """Bạn là một chuyên gia làm phụ đề video. HÃY XEM VIDEO VÀ NGHE CẢ ÂM THANH TRONG VIDEO NÀY.
-            
-            QUY TẮC BẮT BUỘC (TUYỆT ĐỐI TUÂN THỦ):
-            
-            TRƯỜNG HỢP 1: NẾU TRÊN MÀN HÌNH CÓ SẴN CHỮ (Hardsub / Phụ đề gốc)
-            - BẠN BẮT BUỘC PHẢI lấy đúng mốc thời gian xuất hiện và biến mất của TỪNG KHỐI CHỮ trên màn hình.
-            - TUYỆT ĐỐI KHAN TRỌNG: Bạn phải XÁC ĐỊNH VỊ TRÍ của dòng chữ gốc đó trên màn hình đang nằm ở đâu.
-               + Nếu chữ ở trên cùng màn hình (đỉnh đầu): Bạn chèn thêm tag [TOP] vào đầu câu gốc.
-               + Nếu chữ nằm chình ình ở giữa màn hình: Bạn chèn thêm tag [MID] vào đầu câu gốc.
-               + Nếu chữ nằm ở dưới đáy màn hình như bình thường: Bạn chèn thêm tag [BOTTOM] vào đầu câu gốc.
+            YÊU CẦU BẮT BUỘC:
+            1. Căn thời gian chính xác theo nhịp thoại của nhân vật/nhịp xuất hiện của chữ.
+            2. VỊ TRÍ CHỮ: Hãy nhìn xem chữ Tiếng Trung đang nằm ở đâu trên video. 
+               - Nếu chữ nằm trên đỉnh màn hình: Thêm thẻ [TOP] vào đầu câu Tiếng Trung.
+               - Nếu chữ nằm ở giữa màn hình: Thêm thẻ [MID] vào đầu câu Tiếng Trung.
+               - Nếu chữ nằm dưới đáy màn hình (hoặc không có chữ, chỉ có tiếng): Thêm thẻ [BOTTOM] vào đầu câu Tiếng Trung.
+            3. Mỗi ô phụ đề gồm 2 dòng:
+               Dòng 1: Tiếng Trung gốc (Bắt buộc phải có tag [TOP], [MID] hoặc [BOTTOM] ở đầu)
+               Dòng 2: Bản dịch Tiếng Việt (câu ngắn, dưới 10 từ, nếu dài phải cắt ra làm nhiều block)
+            4. Trình bày CHÍNH XÁC theo định dạng .srt (Tuyệt đối không bỏ sót Giờ trong mốc thời gian, vd: 00:00:01,000)
+            """
 
-            TRƯỜNG HỢP 2: NẾU TRÊN MÀN HÌNH KHÔNG CÓ CHỮ (Chỉ nghe lời nói)
-            - Hãy lắng nghe giọng nói và chia nhỏ thành các đoạn ngắn. Chèn tag [BOTTOM] vào đầu câu gốc.
+            response = model.generate_content([prompt, uploaded_video])
+            srt_text = response.text.strip().replace('```srt', '').replace('```', '').strip()
 
-            ĐỊNH DẠNG ĐẦU RA (SRT CHUẨN - TUYỆT ĐỐI KHÔNG VIẾT THIẾU):
-            Dòng 1: Số thứ tự
-            Dòng 2: Thời gian (ví dụ 00:00:01,000 --> 00:00:03,500)
-            Dòng 3: Nội dung gốc (BẮT BUỘC phải có tag [TOP] hoặc [MID] hoặc [BOTTOM] đứng đầu)
-            Dòng 4: Bản dịch Tiếng Việt tương ứng
-            
-            LƯU Ý: Tuyệt đối không viết gì thêm ngoài định dạng SRT."""
-
-            generation_config = genai.types.GenerationConfig(max_output_tokens=8192, temperature=0.1)
-            response = model.generate_content([prompt, uploaded_video], generation_config=generation_config)
-            
-            st.session_state.srt_content = response.text.strip().replace('```srt', '').replace('```', '').strip()
+            st.session_state.srt_content = srt_text
             genai.delete_file(uploaded_video.name)
-            
-            st.success("🎉 Phân tích xong! Vui lòng kiểm tra bảng phụ đề ở Bước 4.")
+            st.success("Trích xuất phụ đề thành công! Hãy kiểm tra nội dung bên dưới.")
+
         except Exception as e:
             st.error(f"Đã xảy ra lỗi: {e}")
 
 # ==========================================
-# BƯỚC 2: XUẤT VIDEO VIETSUB
+# BƯỚC 2: KIỂM TRA -> LỌC & GHÉP VÀO VIDEO
 # ==========================================
 if st.session_state.srt_content:
     st.divider()
-    st.subheader("📝 4. Kiểm tra & Chỉnh sửa Phụ đề")
-    edited_srt = st.text_area("Bạn có thể sửa trực tiếp lỗi chính tả hoặc thời gian tại đây trước khi xuất video:", value=st.session_state.srt_content, height=380)
+    st.subheader("Bước 2: Đối chiếu Tiếng Trung gốc & Sửa bản dịch Tiếng Việt")
+    st.info("💡 Ô bên dưới hiển thị cả chữ Trung gốc để bạn đối chiếu. Ứng dụng sẽ TỰ ĐỘNG dọn sạch tiếng Trung, đẩy hộp đen che đúng vị trí tiếng Trung trên video!")
+    
+    edited_srt = st.text_area(
+        label="Nội dung phụ đề (Bạn có thể xem chữ Trung gốc và chỉnh sửa câu tiếng Việt):",
+        value=st.session_state.srt_content,
+        height=380
+    )
 
-    if st.button("🎬 Ghép Phụ Đề & Xuất Video Hoàn Chỉnh"):
+    if st.button("🎬 Xác nhận & Ghép Vietsub vào Video"):
         try:
             srt_filename = "phu_de_vietsub.srt"
             ass_filename = "phu_de_vietsub.ass"
-            output_video_file = "video_hoanchinh.mp4"
-            
-            # Xuất file SRT sạch (không có tag vị trí) cho người dùng tải về
+            output_video_file = "video_vietsub_output.mp4"
+
+            # 1. Tự động xuất file srt sạch (không có thẻ vị trí, không tiếng Trung)
             with open(srt_filename, "w", encoding="utf-8") as f:
                 f.write(filter_only_vietnamese_srt(edited_srt))
-            
-            # Xuất file ASS có chèn mã định vị 
+
+            # 2. Tạo file ASS thông minh (có mã dịch chuyển tọa độ hộp đen)
             has_dialogue = create_ass_file(edited_srt, ass_filename, cover_original=cover_original)
-            
+
             if not has_dialogue:
-                st.error("❌ Cảnh báo: Tool không đọc được mốc thời gian nào hợp lệ từ ô văn bản phía trên.")
+                st.error("❌ Cảnh báo: Tool không đọc được mốc thời gian nào hợp lệ.")
             else:
-                st.info("🎬 Đang burn (ghép cứng) phụ đề vào Video...")
+                st.info("🎬 Đang tiến hành ghép Vietsub tiếng Việt vào video...")
                 
+                # 3. Lệnh FFmpeg an toàn nhất trên Windows
                 cmd = [
                     "ffmpeg", "-y", 
                     "-i", st.session_state.temp_video_path, 
@@ -246,17 +248,29 @@ if st.session_state.srt_content:
                     "-c:a", "copy",
                     output_video_file
                 ]
-                
-                subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
-                st.success("🎉 Hoàn tất! Video đã được Vietsub.")
-                col_a, col_b = st.columns(2)
-                with col_a:
-                    st.download_button("📝 Tải File Phụ Đề (.srt)", data=open(srt_filename, "rb"), file_name="vietsub.srt", mime="text/plain")
-                with col_b:
-                    st.download_button("🎬 Tải Video Hoàn Chỉnh", data=open(output_video_file, "rb"), file_name="video_vietsub.mp4", mime="video/mp4")
+                subprocess.run(cmd, check=True)
+                st.success("🎉 Hoàn tất ghép Vietsub sạch đẹp vào video!")
+
+                col1, col2 = st.columns(2)
+                with col1:
+                    with open(srt_filename, "rb") as file_srt:
+                        st.download_button(
+                            label="📝 Tải file phụ đề Vietsub (.srt)",
+                            data=file_srt,
+                            file_name="vietsub.srt",
+                            mime="text/plain"
+                        )
+                with col2:
+                    with open(output_video_file, "rb") as file_vid:
+                        st.download_button(
+                            label="🎬 Tải Video Vietsub hoàn chỉnh (.mp4)",
+                            data=file_vid,
+                            file_name="video_vietsub_hoanchinh.mp4",
+                            mime="video/mp4"
+                        )
 
         except subprocess.CalledProcessError as e:
-            st.error(f"Lỗi ghép video từ FFmpeg: {e.stderr}")
+            st.error(f"Lỗi ghép video từ FFmpeg: {e}")
         except Exception as e:
-            st.error(f"Lỗi: {e}")
+            st.error(f"Lỗi khi ghép phụ đề vào video: {e}")
