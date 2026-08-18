@@ -20,7 +20,7 @@ if "temp_video_path" not in st.session_state:
 
 # Tùy chọn hiển thị phụ đề
 st.subheader("⚙️ Tùy chọn hiển thị")
-cover_original = st.checkbox("Bật nền đen to bọc quanh chữ Tiếng Việt để che Tiếng Trung", value=True)
+cover_original = st.checkbox("Bật ô vuông đen bọc quanh phụ đề Tiếng Việt để che chữ Tiếng Trung", value=True)
 
 st.divider()
 st.subheader("📹 Chọn nguồn video")
@@ -56,7 +56,7 @@ def filter_only_vietnamese_srt(srt_text):
         lines = block.strip().split("\n")
         if len(lines) >= 3:
             header = lines[:2]
-            vi_line = lines[-1].strip() # Chỉ lấy dòng tiếng Việt cuối cùng
+            vi_line = lines[-1].strip() # Lấy thẳng dòng tiếng Việt
             cleaned_blocks.append("\n".join(header + [vi_line]))
         else:
             cleaned_blocks.append(block)
@@ -84,15 +84,15 @@ def create_ass_file(srt_text, ass_filename, cover_original=True):
     blocks = re.split(r'\n\s*\n', srt_text.strip())
     
     if cover_original:
-        border_style = "3"      # Số 3 là lệnh tạo nền hộp (Box)
-        box_color = "&H00000000" # Mã màu đen đặc
-        outline = "15"          # Độ to của nền đen (càng to che càng khỏe)
+        border_style = "3"       # 3: Chế độ nền khối (Box)
+        box_color = "&H00000000" # Đen đặc 100%
+        outline = "15"           # Độ phình to của cái hộp đen
     else:
-        border_style = "1"      # Số 1 là chỉ có viền chữ
+        border_style = "1"       # 1: Chữ viền bình thường
         box_color = "&H00000000" 
         outline = "2"           
 
-    # MarginV=20 chính là mốc đẩy chữ xuống sát đáy giống y như ảnh bạn vừa chụp
+    # MarginV=20 giữ đúng vị trí đè hoàn hảo của bạn
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: 1280
@@ -115,12 +115,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\
                 start_ass = convert_srt_time_to_ass(time_match.group(1))
                 end_ass = convert_srt_time_to_ass(time_match.group(2))
                 
-                text = lines[-1].strip() # Lấy thẳng dòng tiếng Việt
+                text = lines[-1].strip() # Dòng tiếng Việt
                 
                 if text:
                     if cover_original:
-                        # Thêm khoảng trắng vào 2 đầu để nền đen dài ra 2 bên, che trọn chữ Trung Quốc
-                        text = "       " + text + "       "
+                        # Dùng mã \h của ASS để kéo dài hộp đen sang 2 bên cho an toàn tuyệt đối
+                        text = r"\h\h\h\h\h" + text + r"\h\h\h\h\h"
                     dialogues.append(f"Dialogue: 0,{start_ass},{end_ass},Default,,0,0,0,,{text}")
     
     with open(ass_filename, "w", encoding="utf-8-sig") as f:
@@ -175,7 +175,6 @@ if st.button("🚀 Bắt đầu phân tích Video & Dịch"):
 
             st.info("⚡ Gemini đang quét phụ đề siêu tốc... (Vui lòng đợi vài giây)")
 
-            # Lệnh siêu gọn gàng, bỏ hết phân tích vị trí rườm rà
             prompt = """
             Bạn là một hệ thống Cỗ Máy Quét Phụ Đề (OCR) chuyên nghiệp.
             Nhiệm vụ của bạn là ĐỌC BẰNG MẮT TẤT CẢ CÁC CHỮ xuất hiện trên màn hình video (Ưu tiên chữ ở dưới đáy màn hình).
@@ -228,20 +227,18 @@ if st.session_state.srt_content:
             else:
                 st.info("🎬 Đang tiến hành ghép nền đen & Vietsub vào video...")
                 
-                # Sửa đường dẫn để FFmpeg chạy an toàn 100% trên mọi máy Windows
-                ass_abspath = os.path.abspath(ass_filename).replace('\\', '/').replace(':', '\\:')
-                
+                # ĐÃ SỬA LỖI: Dùng tên file trực tiếp, bỏ hết nháy đơn để FFmpeg Windows không bị mù
                 cmd = [
                     "ffmpeg", "-y", 
                     "-i", st.session_state.temp_video_path, 
-                    "-vf", f"subtitles='{ass_abspath}'", 
+                    "-vf", f"subtitles={ass_filename}", 
                     "-c:v", "libx264", 
                     "-c:a", "copy",
                     output_video_file
                 ]
 
                 subprocess.run(cmd, check=True)
-                st.success("🎉 Hoàn tất! Phụ đề đã được ghép cùng khung đen che chữ gốc.")
+                st.success("🎉 Hoàn tất! Phụ đề đã được ghép cùng ô đen bọc chữ.")
 
                 col1, col2 = st.columns(2)
                 with col1:
