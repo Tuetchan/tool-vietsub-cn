@@ -1,5 +1,3 @@
-0.58 复制打开抖音，看看【月月云创的作品】系统让我做一个顶级反派，欺负龙傲天男主，可是...... https://v.douyin.com/O6EVMCBWQ8k/ :2pm 02/01 reB:/ z@t.RX 
-
 import streamlit as st
 import yt_dlp
 import os
@@ -11,6 +9,11 @@ import subprocess
 st.set_page_config(page_title="Auto Vietsub Tool", page_icon="🎬", layout="wide")
 st.title("🎬 Tool Auto Vietsub Phim Trung Quốc (Gemini 3.5 Flash)")
 st.write("Quét phụ đề siêu tốc với Gemini 3.5 & Tùy chỉnh độ to nhỏ của nền đen")
+
+# --- ĐÃ THÊM: Tạo thư mục lưu trữ video vĩnh viễn ---
+OUTPUT_DIR = "output_videos"
+if not os.path.exists(OUTPUT_DIR):
+    os.makedirs(OUTPUT_DIR)
 
 # Nhập API Key
 api_key = st.text_input("Nhập Gemini API Key của bạn:", type="password")
@@ -27,7 +30,7 @@ display_mode = st.radio(
     ("Nổi bên trên chữ gốc (Không che)", "Che đè lên chữ gốc (Tạo hộp đen)")
 )
 
-# ĐÃ THÊM: Cho phép tùy chỉnh độ to của nền đen trên giao diện
+# Cho phép tùy chỉnh độ to của nền đen trên giao diện
 outline_size = st.number_input(
     "Độ dày/to của hộp nền đen (Mặc định: 2. Tăng số này lên để nền đen phình to ra che chữ tốt hơn):", 
     min_value=0, max_value=50, value=2, step=1
@@ -202,7 +205,7 @@ if st.button("🚀 Bắt đầu phân tích Video & Dịch"):
             model = genai.GenerativeModel('gemini-3.5-flash')
 
             temp_video_path = "temp_video.mp4"
-            cleanup_files(temp_video_path, "phu_de_vietsub.srt", "phu_de_vietsub.ass", "video_vietsub_output.mp4")
+            cleanup_files(temp_video_path, "phu_de_vietsub.srt", "phu_de_vietsub.ass")
 
             if option == "Tải tệp video từ máy (MP4, MOV,...)":
                 file_ext = uploaded_file.name.split('.')[-1]
@@ -286,14 +289,16 @@ if st.session_state.srt_content:
         try:
             srt_filename = "phu_de_vietsub.srt"
             ass_filename = "phu_de_vietsub.ass"
-            output_video_file = "video_vietsub_output.mp4"
+            
+            # ĐÃ SỬA: Đặt tên file video duy nhất dựa trên thời gian để lưu trữ
+            timestamp = int(time.time())
+            output_video_file = os.path.join(OUTPUT_DIR, f"video_vietsub_{timestamp}.mp4")
 
             adjusted_srt = apply_timing_offsets(edited_srt, start_offset, end_offset)
 
             with open(srt_filename, "w", encoding="utf-8") as f:
                 f.write(filter_only_vietnamese_srt(adjusted_srt))
 
-            # ĐÃ CẬP NHẬT: Truyền thông số độ to nền đen (outline_size) vào khi tạo file phụ đề
             has_dialogue = create_ass_file(adjusted_srt, ass_filename, display_mode, outline_size)
 
             if not has_dialogue:
@@ -304,7 +309,7 @@ if st.session_state.srt_content:
                 cmd = [
                     "ffmpeg", "-y", 
                     "-i", st.session_state.temp_video_path, 
-                    "-vf", "subtitles=phu_de_vietsub.ass", 
+                    "-vf", f"subtitles=phu_de_vietsub.ass", 
                     "-c:v", "libx264", 
                     "-c:a", "copy",
                     output_video_file
@@ -327,11 +332,62 @@ if st.session_state.srt_content:
                         st.download_button(
                             label="🎬 Tải Video Vietsub hoàn chỉnh (.mp4)",
                             data=file_vid,
-                            file_name="video_vietsub_hoanchinh.mp4",
+                            file_name=f"video_vietsub_{timestamp}.mp4",
                             mime="video/mp4"
                         )
+                
+                # Cập nhật lại giao diện để hiển thị video mới trong danh sách
+                st.rerun()
 
         except subprocess.CalledProcessError as e:
             st.error(f"Lỗi ghép video từ FFmpeg: {e}")
         except Exception as e:
             st.error(f"Lỗi khi ghép phụ đề vào video: {e}")
+
+# ==========================================
+# BƯỚC 3: QUẢN LÝ LỊCH SỬ VIDEO ĐÃ TẠO
+# ==========================================
+st.divider()
+st.subheader("📁 Danh sách Video đã tạo")
+st.write("Các video hiển thị ở đây sẽ không bị mất kể cả khi bạn F5 trang. Bạn có thể tải lại hoặc xóa chúng đi.")
+
+# Hàm quét và lấy danh sách video đã lưu trong thư mục
+def get_saved_videos():
+    if not os.path.exists(OUTPUT_DIR):
+        return []
+    files = [f for f in os.listdir(OUTPUT_DIR) if f.endswith('.mp4')]
+    # Sắp xếp để video mới làm xong nằm trên cùng
+    files.sort(key=lambda x: os.path.getmtime(os.path.join(OUTPUT_DIR, x)), reverse=True)
+    return files
+
+saved_videos = get_saved_videos()
+
+if saved_videos:
+    for vid_file in saved_videos:
+        vid_path = os.path.join(OUTPUT_DIR, vid_file)
+        
+        # Chia cột để hiển thị: Tên video | Nút Tải | Nút Xóa
+        col_name, col_dl, col_del = st.columns([6, 2, 2])
+        
+        with col_name:
+            st.write(f"🎥 **{vid_file}**")
+            
+        with col_dl:
+            with open(vid_path, "rb") as f:
+                st.download_button(
+                    label="⬇️ Tải xuống",
+                    data=f,
+                    file_name=vid_file,
+                    mime="video/mp4",
+                    key=f"dl_{vid_file}" # Đặt key độc nhất để không bị lỗi Streamlit
+                )
+                
+        with col_del:
+            if st.button("❌ Xóa", key=f"del_{vid_file}"):
+                try:
+                    os.remove(vid_path)
+                    st.rerun() # F5 lại trang để cập nhật danh sách
+                except Exception as e:
+                    st.error(f"Không thể xóa file: {e}")
+else:
+    st.info("Chưa có video nào được tạo và lưu trữ.")
