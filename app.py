@@ -16,7 +16,7 @@ api_key = st.text_input("Nhập Gemini API Key (Bắt buộc):", type="password"
 
 # 2. Tùy chọn Phụ đề
 st.subheader("⚙️ 2. Tùy chọn Phụ đề")
-cover_original = st.checkbox("Tạo khung nền đen mờ bao trùm để che chữ gốc (Khuyên dùng nếu video có sẵn chữ tiếng Trung)", value=True)
+cover_original = st.checkbox("Tạo khung hộp đen đặc 100% để che khuất hoàn toàn chữ tiếng Trung gốc", value=True)
 
 # 3. Nguồn Video
 st.divider()
@@ -58,7 +58,6 @@ def filter_only_vietnamese_srt(srt_text):
         lines = block.strip().split("\n")
         if len(lines) >= 3:
             header = lines[:2]
-            # Lấy dòng cuối cùng (bản dịch)
             vi_line = lines[-1].strip()
             cleaned_blocks.append("\n".join(header + [vi_line]))
         else:
@@ -78,11 +77,15 @@ def create_ass_file(srt_text, ass_filename, cover_original=True):
     vi_srt = filter_only_vietnamese_srt(srt_text)
     blocks = re.split(r'\n\s*\n', vi_srt.strip())
     
+    # BorderStyle = 3 là dạng hộp khối (box). BorderStyle = 1 là viền mỏng quanh chữ.
     border_style = "3" if cover_original else "1"
-    back_color = "&H80000000" if cover_original else "&H00000000" 
-    outline = "12" if cover_original else "2"
+    
+    # ĐÃ FIX: Chuyển màu hộp thành Đen Đặc 100% (&H00000000) thay vì đen mờ.
+    box_color = "&H00000000" if cover_original else "&H00000000" 
+    
+    # ĐÃ FIX: Tăng Outline (Độ dày của hộp đen) từ 12 lên 18 để hộp to ra, nuốt trọn chữ Trung Quốc to.
+    outline = "18" if cover_original else "2"
 
-    # Hỗ trợ tự động xuống dòng WrapStyle=1, chống tràn lề nếu câu dịch dài
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: 1280
@@ -91,7 +94,7 @@ WrapStyle: 1
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Arial,26,&H00FFFFFF,&H00000000,&H00000000,{back_color},1,0,0,0,100,100,0,0,{border_style},{outline},0,2,10,10,25,1
+Style: Default,Arial,28,&H00FFFFFF,&H00000000,{box_color},{box_color},1,0,0,0,100,100,0,0,{border_style},{outline},0,2,10,10,25,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"""
@@ -100,7 +103,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\
     for block in blocks:
         lines = block.strip().split("\n")
         if len(lines) >= 3:
-            time_match = re.match(r'(\d{2}:\d{2}:\d{2}[,\.]\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}[,\.]\d{3})', lines[1])
+            time_match = re.match(r'(\d{2}:\d{2}:\d{2}(?:[,\.]\d{1,3})?)\s*-->\s*(\d{2}:\d{2}:\d{2}(?:[,\.]\d{1,3})?)', lines[1])
             if time_match:
                 start_ass = convert_srt_time_to_ass(time_match.group(1))
                 end_ass = convert_srt_time_to_ass(time_match.group(2))
@@ -108,11 +111,14 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\
                 text = r"\N".join(text_lines).strip()
                 if text:
                     if cover_original:
-                        text = r"\h\h\h\h" + text + r"\h\h\h\h"
+                        # ĐÃ FIX: Thêm nhiều khoảng trắng (\h) 2 bên để kéo dài hộp đen sang 2 cạnh.
+                        text = r"\h\h\h\h\h" + text + r"\h\h\h\h\h"
                     dialogues.append(f"Dialogue: 0,{start_ass},{end_ass},Default,,0,0,0,,{text}")
     
     with open(ass_filename, "w", encoding="utf-8") as f:
         f.write(header + "\n".join(dialogues))
+        
+    return len(dialogues) > 0
 
 # ==========================================
 # BƯỚC 1: TRÍCH XUẤT PHỤ ĐỀ BẰNG GEMINI
@@ -152,7 +158,6 @@ if st.button("🚀 Bắt đầu Phân tích & Dịch Video"):
 
             st.info("⚡ AI đang kiểm tra phụ đề màn hình và nghe giọng nói... (Vui lòng chờ khoảng 30s - 1 phút)")
             
-            # --- ĐÃ FIX: Hướng dẫn AI xử lý rạch ròi 2 trường hợp ---
             prompt = """Bạn là một chuyên gia làm phụ đề video. HÃY XEM VIDEO VÀ NGHE CẢ ÂM THANH TRONG VIDEO NÀY.
             
             QUY TẮC BẮT BUỘC (TUYỆT ĐỐI TUÂN THỦ):
@@ -199,27 +204,34 @@ if st.session_state.srt_content:
             
             with open(srt_filename, "w", encoding="utf-8") as f:
                 f.write(filter_only_vietnamese_srt(edited_srt))
-            create_ass_file(edited_srt, ass_filename, cover_original=cover_original)
-
-            st.info("🎬 Đang burn (ghép cứng) phụ đề vào Video...")
             
-            cmd = [
-                "ffmpeg", "-y", 
-                "-i", st.session_state.temp_video_path, 
-                "-vf", f"subtitles={ass_filename}", 
-                "-c:v", "libx264", 
-                "-c:a", "copy",
-                output_video_file
-            ]
+            has_dialogue = create_ass_file(edited_srt, ass_filename, cover_original=cover_original)
             
-            subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            if not has_dialogue:
+                st.error("❌ Cảnh báo: Tool không đọc được mốc thời gian nào hợp lệ từ ô văn bản phía trên. Vui lòng kiểm tra lại định dạng mốc thời gian (ví dụ: 00:00:01,000 --> 00:00:03,000)!")
+            else:
+                st.info("🎬 Đang burn (ghép cứng) phụ đề vào Video...")
+                
+                ass_abspath = os.path.abspath(ass_filename)
+                ass_ffmpeg_path = ass_abspath.replace('\\', '/').replace(':', '\\:')
+                
+                cmd = [
+                    "ffmpeg", "-y", 
+                    "-i", st.session_state.temp_video_path, 
+                    "-vf", f"subtitles='{ass_ffmpeg_path}'", 
+                    "-c:v", "libx264", 
+                    "-c:a", "copy",
+                    output_video_file
+                ]
+                
+                subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
-            st.success("🎉 Hoàn tất! Video đã được Vietsub.")
-            col_a, col_b = st.columns(2)
-            with col_a:
-                st.download_button("📝 Tải File Phụ Đề (.srt)", data=open(srt_filename, "rb"), file_name="vietsub.srt", mime="text/plain")
-            with col_b:
-                st.download_button("🎬 Tải Video Hoàn Chỉnh", data=open(output_video_file, "rb"), file_name="video_vietsub.mp4", mime="video/mp4")
+                st.success("🎉 Hoàn tất! Video đã được Vietsub.")
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    st.download_button("📝 Tải File Phụ Đề (.srt)", data=open(srt_filename, "rb"), file_name="vietsub.srt", mime="text/plain")
+                with col_b:
+                    st.download_button("🎬 Tải Video Hoàn Chỉnh", data=open(output_video_file, "rb"), file_name="video_vietsub.mp4", mime="video/mp4")
 
         except subprocess.CalledProcessError as e:
             st.error(f"Lỗi ghép video từ FFmpeg: {e.stderr}")
