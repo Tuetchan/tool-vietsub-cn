@@ -219,11 +219,17 @@ def adjust_audio_speed(input_file, speed_factor):
         if os.path.exists(temp_out):
             os.remove(temp_out)
 
+# --- ĐÃ FIX: HÀM TẠO GIỌNG ĐỌC CHO TỪNG CÂU ---
 def generate_single_tts(sub_item):
     idx, sub, voice, service_type, key = sub_item
-    text = sub['text']
+    text = sub['text'].strip()
     start_sec = sub['start']
     end_sec = sub['end']
+    
+    # FIX: Bỏ qua chuỗi rỗng để không bị crash API
+    if not text:
+        return idx, start_sec, None
+
     max_duration = max(0.5, end_sec - start_sec)
     temp_speech_file = f"temp_speech_{idx}.mp3"
     
@@ -236,6 +242,8 @@ def generate_single_tts(sub_item):
                 if response.status_code == 200:
                     with open(temp_speech_file, "wb") as f:
                         f.write(response.content)
+                else:
+                    raise Exception("OpenAI API Error")
 
             elif service_type == "Paid_ElevenLabs":
                 headers = {"Accept": "audio/mpeg", "Content-Type": "application/json", "xi-api-key": key}
@@ -245,6 +253,8 @@ def generate_single_tts(sub_item):
                 if response.status_code == 200:
                     with open(temp_speech_file, "wb") as f:
                         f.write(response.content)
+                else:
+                    raise Exception("ElevenLabs API Error")
 
             else: # Edge-TTS
                 cmd = ["edge-tts", "--voice", voice, "--text", text, "--write-media", temp_speech_file]
@@ -262,6 +272,7 @@ def generate_single_tts(sub_item):
             
     return idx, start_sec, None
 
+# --- ĐÃ FIX: HÀM GHÉP CÁC CÂU LỒNG TIẾNG VÀO CHUNG 1 LUỒNG AUDIO ---
 def build_audio_ffmpeg_parallel(subtitles, voice, output_audio_path, service_type, key):
     tasks = [(idx, sub, voice, service_type, key) for idx, sub in enumerate(subtitles)]
     max_workers = 3 if service_type == "Free_EdgeTTS" else 5
@@ -280,17 +291,28 @@ def build_audio_ffmpeg_parallel(subtitles, voice, output_audio_path, service_typ
             inputs.extend(["-i", temp_speech_file])
             filter_complex_parts.append(f"[{file_input_idx}:a]adelay={delay_ms}|{delay_ms}[a{file_input_idx}]")
 
+    # FIX: Trả về False nếu không có câu thoại nào thành công
     if not filter_complex_parts:
         return False
 
-    mix_inputs = "".join([f"[a{i}]" for i in range(len(filter_complex_parts))])
-    filter_complex_str = ";".join(filter_complex_parts) + f";{mix_inputs}amix=inputs={len(filter_complex_parts)}:normalize=0:dropout_transition=0[outa]"
+    # FIX: Xử lý mượt mà khi chỉ có 1 câu thoại (Tránh lỗi amix=inputs=1)
+    if len(filter_complex_parts) == 1:
+        filter_complex_str = filter_complex_parts[0].replace("[a0]", "[outa]")
+    else:
+        mix_inputs = "".join([f"[a{i}]" for i in range(len(filter_complex_parts))])
+        # Nếu có lỗi về normalize, bạn có thể xóa đoạn ":normalize=0" ở dòng dưới
+        filter_complex_str = ";".join(filter_complex_parts) + f";{mix_inputs}amix=inputs={len(filter_complex_parts)}:normalize=0:dropout_transition=0[outa]"
 
     with open("audio_filter.txt", "w", encoding="utf-8") as f:
         f.write(filter_complex_str)
 
     cmd = ["ffmpeg", "-y"] + inputs + ["-filter_complex_script", "audio_filter.txt", "-map", "[outa]", output_audio_path]
-    subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    
+    try:
+        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    except subprocess.CalledProcessError as e:
+        print(f"LỖI TẠO AUDIO TỪ FFMPEG: {e.stderr}") # In ra terminal để dễ sửa nếu lỗi
+        return False
     
     cleanup_files(*temp_files, "audio_filter.txt")
     return True
@@ -399,6 +421,7 @@ if st.session_state.srt_content:
                     try:
                         subprocess.run(cmd, check=True, capture_output=True, text=True)
                     except subprocess.CalledProcessError:
+                        # Fallback nếu lệnh mix audio phức tạp bị lỗi
                         subprocess.run(["ffmpeg", "-y", "-i", st.session_state.temp_video_path, "-i", audio_tts_file, "-filter_complex", f"[0:v]subtitles={ass_filename}[outv]", "-map", "[outv]", "-map", "1:a", "-c:v", "libx264", "-c:a", "aac", output_video_file], check=True)
                 else:
                     subprocess.run(["ffmpeg", "-y", "-i", st.session_state.temp_video_path, "-vf", f"subtitles={ass_filename}", "-c:a", "copy", output_video_file], check=True)
@@ -411,4 +434,4 @@ if st.session_state.srt_content:
                     st.download_button("🎬 Tải Video Hoàn Chỉnh", data=open(output_video_file, "rb"), file_name="video_vietsub_longtieng.mp4", mime="video/mp4")
 
             except Exception as e:
-                st.error(f"Lỗi: {e}")
+                st.error(f"Lỗi ghép video: {e}")
