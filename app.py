@@ -8,7 +8,7 @@ import subprocess
 
 st.set_page_config(page_title="Auto Vietsub Tool", page_icon="🎬", layout="wide")
 st.title("🎬 Tool Auto Vietsub Phim Trung Quốc (Gemini 3.5 Flash)")
-st.write("Quét phụ đề siêu tốc với Gemini 3.5 & Tùy chỉnh hộp đen cố định")
+st.write("Tạo ô đen CỐ ĐỊNH 100% không co giãn - Vietsub chuyên nghiệp")
 
 # Nhập API Key
 api_key = st.text_input("Nhập Gemini API Key của bạn:", type="password")
@@ -19,19 +19,21 @@ if "temp_video_path" not in st.session_state:
     st.session_state.temp_video_path = ""
 
 # Tùy chọn hiển thị phụ đề
-st.subheader("⚙️ Tùy chọn hiển thị")
+st.subheader("⚙️ Tùy chỉnh Khung Đen (Đổ bê tông cố định)")
 display_mode = st.radio(
-    "Cách hiển thị phụ đề Vietsub trên video:", 
-    ("Che đè lên chữ gốc (Tạo hộp đen cố định)", "Nổi bên trên chữ gốc (Chữ có viền, không hộp)")
+    "Chế độ hiển thị:", 
+    ("Tạo 1 ô đen CỐ ĐỊNH che chữ gốc (Chữ dài hay ngắn ô đen vẫn đứng im)", "Chỉ hiện chữ (Không có ô đen)")
 )
 
-# ĐÃ FIX TẬN GỐC: Thêm công cụ chỉnh Chiều Cao & Chiều Dài của khối đen
-st.markdown("📏 **Tùy chỉnh kích thước khối đen (Chỉ áp dụng ở chế độ Che đè):**")
-col_box1, col_box2 = st.columns(2)
-with col_box1:
-    outline_size = st.number_input("↕️ Độ cao/dày của khối đen (Mặc định 18):", min_value=0, max_value=100, value=18, step=1)
-with col_box2:
-    box_width = st.number_input("↔️ Độ dài ngang của khối đen (Mặc định 70):", min_value=10, max_value=300, value=70, step=5, help="Tăng số này để dải băng đen vươn dài ra 2 bên màn hình.")
+# ĐÃ FIX TẬN GỐC: Kích thước hình học cố định (Không bị ảnh hưởng bởi độ dài câu)
+st.markdown("📏 **Kích thước Ô Đen (Chỉ áp dụng khi chọn Tạo ô đen cố định):**")
+col_b1, col_b2, col_b3 = st.columns(3)
+with col_b1:
+    box_width = st.number_input("↔️ Chiều ngang (px):", min_value=100, max_value=1280, value=900, step=50, help="Độ rộng khối đen. Max là 1280 (Full viền ngang).")
+with col_b2:
+    box_height = st.number_input("↕️ Chiều cao (px):", min_value=20, max_value=300, value=75, step=5, help="Độ dày của khối đen.")
+with col_b3:
+    box_y_offset = st.number_input("⬆️ Cách đáy (px):", min_value=0, max_value=300, value=20, step=5, help="Đẩy khối đen lên cao khỏi đáy màn hình.")
 
 st.divider()
 st.subheader("📹 Chọn nguồn video")
@@ -59,7 +61,6 @@ def extract_clean_url(text):
         return url_match.group(0)
     return text.strip()
 
-# HÀM: Tự động cộng/trừ thời gian (sớm lên, trễ đi)
 def adjust_time_str(time_str, offset_sec):
     time_str = time_str.replace(',', '.')
     parts = time_str.split(':')
@@ -126,17 +127,12 @@ def convert_srt_time_to_ass(srt_time_str):
     cs = int(s_parts[1][:2].ljust(2, '0')) if len(s_parts) > 1 else 0
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
-# HÀM MỚI: Tách nền đen (Lớp 0) và Chữ (Lớp 1) để nền đen luôn đứng im
-def create_ass_file(srt_text, ass_filename, display_mode, outline_size, box_width):
+# HÀM MỚI: Vẽ ô vuông bằng tọa độ hình học (Tuyệt đối không co giãn)
+def create_ass_file(srt_text, ass_filename, display_mode, box_w, box_h, bottom_offset):
     srt_text = srt_text.replace('\r', '')
     blocks = re.split(r'\n\s*\n', srt_text.strip())
     
-    if display_mode == "Che đè lên chữ gốc (Tạo hộp đen cố định)":
-        margin_v = "15" # Nằm sát đáy
-    else:
-        margin_v = "75" # Bổng lên cao
-
-    # Định nghĩa 2 Style: BoxStyle (Để vẽ cục đen) và Default (Để viết chữ trắng)
+    # Thiết lập 2 Style (Căn giữa tâm - Alignment 5)
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: 1280
@@ -145,13 +141,18 @@ WrapStyle: 1
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: BoxStyle,Arial,28,&H00000000,&H00000000,&H00000000,&H00000000,1,0,0,0,100,100,0,0,3,{outline_size},0,2,10,10,{margin_v},1
-Style: Default,Arial,28,&H00FFFFFF,&H00000000,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,2,0,2,10,10,{margin_v},1
+Style: BoxStyle,Arial,28,&H00FFFFFF,&H00000000,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,0,0,5,0,0,0,1
+Style: Default,Arial,28,&H00FFFFFF,&H00000000,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,2,0,5,0,0,0,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"""
     
     dialogues = []
+    
+    # Tính toán tọa độ vẽ hình chữ nhật
+    half_w = int(box_w / 2)
+    half_h = int(box_h / 2)
+    
     for block in blocks:
         lines = block.strip().split("\n")
         if len(lines) >= 3:
@@ -163,25 +164,29 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\
                 raw_text_vi = lines[-1].strip()
                 raw_text_goc = lines[-2].strip()
                 
-                alignment_tag = ""
+                # Tính toán tọa độ Y (Cao/Thấp)
                 if "[TOP]" in raw_text_goc.upper():
-                    alignment_tag = r"{\an8}" 
+                    y_pos = bottom_offset + half_h
                 elif "[MID]" in raw_text_goc.upper():
-                    alignment_tag = r"{\an5}" 
+                    y_pos = 360
                 else:
-                    alignment_tag = r"{\an2}"
+                    y_pos = 720 - bottom_offset - half_h # Căn chuẩn từ dưới đáy lên
 
+                pos_tag = f"\\pos(640,{y_pos})"
                 text = re.sub(r'\[(TOP|MID|BOTTOM)\]\s*', '', raw_text_vi, flags=re.IGNORECASE)
                 
                 if text:
-                    if display_mode == "Che đè lên chữ gốc (Tạo hộp đen cố định)":
-                        # Lớp 0: Tạo một dải đen cố định bằng khoảng trắng (luôn giữ nguyên 1 độ dài)
-                        fixed_bg = r"\h" * int(box_width)
-                        dialogues.append(f"Dialogue: 0,{start_ass},{end_ass},BoxStyle,,0,0,0,,{{\\q2}}{alignment_tag}{fixed_bg}")
-                        # Lớp 1: Chữ tiếng Việt đè lên trên dải đen
-                        dialogues.append(f"Dialogue: 1,{start_ass},{end_ass},Default,,0,0,0,,{alignment_tag}{text}")
+                    if display_mode == "Tạo 1 ô đen CỐ ĐỊNH che chữ gốc (Chữ dài hay ngắn ô đen vẫn đứng im)":
+                        # Vẽ hình chữ nhật đen đặc bằng mã lệnh Vector (p1) của ASS
+                        box_drawing = f"{{{pos_tag}\\1c&H000000&\\bord0\\shad0\\p1}}m {-half_w} {-half_h} l {half_w} {-half_h} l {half_w} {half_h} l {-half_w} {half_h}{{\\p0}}"
+                        
+                        # Layer 0: Cái ô đen ở dưới cùng
+                        dialogues.append(f"Dialogue: 0,{start_ass},{end_ass},BoxStyle,,0,0,0,,{box_drawing}")
+                        
+                        # Layer 1: Chữ tiếng Việt nằm trọn trong ô đen (cùng 1 tọa độ)
+                        dialogues.append(f"Dialogue: 1,{start_ass},{end_ass},Default,,0,0,0,,{{{pos_tag}}}{text}")
                     else:
-                        dialogues.append(f"Dialogue: 1,{start_ass},{end_ass},Default,,0,0,0,,{alignment_tag}{text}")
+                        dialogues.append(f"Dialogue: 1,{start_ass},{end_ass},Default,,0,0,0,,{{{pos_tag}}}{text}")
     
     with open(ass_filename, "w", encoding="utf-8-sig") as f:
         f.write(header + "\n".join(dialogues))
@@ -233,7 +238,7 @@ if st.button("🚀 Bắt đầu phân tích Video & Dịch"):
                 time.sleep(3)
                 uploaded_video = genai.get_file(uploaded_video.name)
 
-            st.info("⚡ Gemini đang quét phụ đề siêu tốc... (Vui lòng đợi vài giây)")
+            st.info("⚡ Gemini 3.5 Flash đang quét phụ đề siêu tốc... (Vui lòng đợi vài giây)")
 
             prompt = """
             Bạn là một hệ thống Cỗ Máy Quét Phụ Đề (OCR) chuyên nghiệp.
@@ -297,8 +302,8 @@ if st.session_state.srt_content:
             with open(srt_filename, "w", encoding="utf-8") as f:
                 f.write(filter_only_vietnamese_srt(adjusted_srt))
 
-            # Chuyển tham số box_width và outline_size vào hàm
-            has_dialogue = create_ass_file(adjusted_srt, ass_filename, display_mode, outline_size, box_width)
+            # Truyền các kích thước cố định vào file ASS
+            has_dialogue = create_ass_file(adjusted_srt, ass_filename, display_mode, box_width, box_height, box_y_offset)
 
             if not has_dialogue:
                 st.error("❌ Cảnh báo: Tool không đọc được mốc thời gian nào hợp lệ.")
