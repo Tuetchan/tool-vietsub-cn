@@ -6,6 +6,7 @@ import time
 import re
 import subprocess
 import pandas as pd
+import shutil
 
 st.set_page_config(page_title="Auto Vietsub & Dubbing Studio", page_icon="🎬", layout="wide")
 st.title("🎬 Studio Vietsub & Lồng Tiếng Phim Trung Quốc")
@@ -242,8 +243,6 @@ tab1, tab2 = st.tabs(["🎬 Tự Động Vietsub (Tiêu Chuẩn)", "🎙️ CapC
 with tab1:
     if "t1_srt_content" not in st.session_state:
         st.session_state.t1_srt_content = ""
-    if "t1_temp_video_path" not in st.session_state:
-        st.session_state.t1_temp_video_path = ""
 
     st.subheader("⚙️ Tùy chọn hiển thị & Kích thước")
     col_opt1, col_opt2 = st.columns(2)
@@ -279,8 +278,8 @@ with tab1:
             try:
                 genai.configure(api_key=api_key)
                 model = genai.GenerativeModel('gemini-3.5-flash')
-                temp_video = "t1_temp.mp4"
-                cleanup_files(temp_video, "t1_sub.srt", "t1_sub.ass")
+                temp_video = "t1_temp_ocr.mp4"
+                cleanup_files(temp_video)
 
                 if t1_option == "Tải tệp video từ máy" and t1_uploaded:
                     with open(temp_video, "wb") as f:
@@ -290,7 +289,6 @@ with tab1:
                     with yt_dlp.YoutubeDL({'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best', 'outtmpl': temp_video, 'quiet': True}) as ydl:
                         ydl.download([clean_url])
                 
-                st.session_state.t1_temp_video_path = temp_video
                 st.info("Đang tải Video lên AI...")
                 uploaded_v = genai.upload_file(path=temp_video)
                 while uploaded_v.state.name == "PROCESSING":
@@ -322,7 +320,6 @@ with tab1:
                 res = model.generate_content([prompt, uploaded_v])
                 new_text = res.text.strip().replace('```srt', '').replace('```', '').strip()
                 
-                # --- ĐÃ SỬA: Ép giao diện cập nhật ngay lập tức ---
                 st.session_state.t1_srt_content = new_text
                 st.session_state.t1_area = new_text 
                 
@@ -339,10 +336,30 @@ with tab1:
     
     t1_edited = st.text_area("Chỉnh sửa phụ đề SRT:", value=st.session_state.t1_srt_content, height=300, key="t1_area")
     
+    # ĐÃ FIX: Logic xử lý Video gốc khi Render
     if st.button("🎬 Xác nhận & Ghép Vietsub", key="t1_btn2"):
         if not t1_edited.strip():
             st.error("Nội dung phụ đề đang trống! Vui lòng cho AI quét hoặc tự dán SRT vào bảng trên.")
         else:
+            st.info("Đang chuẩn bị video nguồn để ghép...")
+            current_render_video = "t1_render_source.mp4"
+            cleanup_files(current_render_video, "t1_sub.srt", "t1_sub.ass")
+
+            # BẮT BUỘC lấy đúng video người dùng vừa tải lên ở Bước 1
+            if t1_option == "Tải tệp video từ máy":
+                if not t1_uploaded:
+                    st.error("Lỗi: Bạn chưa tải video lên ở Bước 1!")
+                    st.stop()
+                with open(current_render_video, "wb") as f:
+                    f.write(t1_uploaded.getbuffer())
+            else:
+                if not t1_raw_link:
+                    st.error("Lỗi: Bạn chưa nhập link video ở Bước 1!")
+                    st.stop()
+                # Tải video từ link về để ghép
+                with yt_dlp.YoutubeDL({'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best', 'outtmpl': current_render_video, 'quiet': True}) as ydl:
+                    ydl.download([extract_clean_url(t1_raw_link)])
+
             ts = int(time.time())
             out_vid = os.path.join(OUTPUT_DIR, f"vid_t1_{ts}.mp4")
             adj_srt = apply_timing_offsets(t1_edited, t1_s_off, t1_e_off)
@@ -351,18 +368,15 @@ with tab1:
                 f.write(filter_only_vietnamese_srt(adj_srt))
             create_ass_file(adj_srt, "t1_sub.ass", t1_display_mode, t1_outline_size, t1_font_size)
             
-            if not st.session_state.t1_temp_video_path or not os.path.exists(st.session_state.t1_temp_video_path):
-                st.error("Chưa có file video nguồn. Hãy tải video ở Bước 1 (dù không bấm quét AI cũng cần phải tải/dán link video).")
-            else:
-                cmd = ["ffmpeg", "-y", "-i", st.session_state.t1_temp_video_path, "-vf", "subtitles=t1_sub.ass", "-c:v", "libx264"]
-                if t1_audio_option == "Tắt hoàn toàn âm thanh": cmd.append("-an")
-                elif t1_audio_option == "Đổi Tone/Méo tiếng nhẹ": cmd.extend(["-af", "asetrate=44100*1.05,aresample=44100,atempo=1/1.05", "-c:a", "aac"])
-                else: cmd.extend(["-c:a", "copy"])
-                cmd.append(out_vid)
-                
-                subprocess.run(cmd, check=True)
-                st.success("Xong!")
-                st.rerun()
+            cmd = ["ffmpeg", "-y", "-i", current_render_video, "-vf", "subtitles=t1_sub.ass", "-c:v", "libx264"]
+            if t1_audio_option == "Tắt hoàn toàn âm thanh": cmd.append("-an")
+            elif t1_audio_option == "Đổi Tone/Méo tiếng nhẹ": cmd.extend(["-af", "asetrate=44100*1.05,aresample=44100,atempo=1/1.05", "-c:a", "aac"])
+            else: cmd.extend(["-c:a", "copy"])
+            cmd.append(out_vid)
+            
+            subprocess.run(cmd, check=True)
+            st.success("Xong! Cuộn xuống cuối trang để tải video.")
+            st.rerun()
 
 # ==========================================
 # TAB 2: STUDIO LỒNG TIẾNG (DUBBING)
@@ -370,8 +384,6 @@ with tab1:
 with tab2:
     if "t2_srt_content" not in st.session_state:
         st.session_state.t2_srt_content = ""
-    if "t2_temp_video_path" not in st.session_state:
-        st.session_state.t2_temp_video_path = ""
 
     st.subheader("1️⃣ Chọn Nguồn Video")
     t2_vsource = st.radio("Lấy video từ đâu?", ("Chọn video đã lưu ở Tab 1", "Tải video mới từ máy"), key="t2_vsrc")
@@ -400,16 +412,18 @@ with tab2:
             try:
                 genai.configure(api_key=api_key)
                 model = genai.GenerativeModel('gemini-3.5-flash')
-                temp_video = "t2_temp.mp4"
+                temp_video = "t2_temp_ocr.mp4"
+                cleanup_files(temp_video)
                 
                 if t2_vsource == "Chọn video đã lưu ở Tab 1" and t2_selected_vid:
-                    import shutil
                     shutil.copy(os.path.join(OUTPUT_DIR, t2_selected_vid), temp_video)
                 elif t2_vsource == "Tải video mới từ máy" and t2_uploaded:
                     with open(temp_video, "wb") as f:
                         f.write(t2_uploaded.getbuffer())
+                else:
+                    st.error("Chưa có video để quét!")
+                    st.stop()
                 
-                st.session_state.t2_temp_video_path = temp_video
                 st.info("Đang tải Video lên AI...")
                 uploaded_v = genai.upload_file(path=temp_video)
                 while uploaded_v.state.name == "PROCESSING":
@@ -440,7 +454,6 @@ with tab2:
                 res = model.generate_content([prompt, uploaded_v])
                 new_text = res.text.strip().replace('```srt', '').replace('```', '').strip()
                 
-                # --- ĐÃ SỬA: Ép giao diện cập nhật ngay lập tức ---
                 st.session_state.t2_srt_content = new_text
                 st.session_state.t2_area = new_text
                 
@@ -493,14 +506,29 @@ with tab2:
         t2_font = st.number_input("Cỡ chữ:", value=28, key="t2_font")
         t2_outline = st.number_input("Hộp đen:", value=2, key="t2_outline")
 
+    # ĐÃ FIX: Logic xử lý Video gốc khi Render
     if st.button("🎬 KẾT HỢP & XUẤT VIDEO LỒNG TIẾNG", type="primary"):
         if not t2_edited.strip():
             st.error("Bảng SRT đang trống! Hãy quét AI hoặc dán SRT của bạn vào Bước 3.")
-        elif not st.session_state.t2_temp_video_path or not os.path.exists(st.session_state.t2_temp_video_path):
-            st.error("Video chưa được xử lý vào bộ nhớ tạm! Bạn hãy ấn tải/chọn video ở Bước 1.")
         else:
             try:
-                st.info("Đang xử lý Audio và Video...")
+                st.info("Đang chuẩn bị video nguồn để ghép...")
+                current_render_video = "t2_render_source.mp4"
+                cleanup_files(current_render_video, "t2_sub.ass")
+
+                # BẮT BUỘC lấy đúng video đang chọn ở Bước 1 ngay lúc này
+                if t2_vsource == "Chọn video đã lưu ở Tab 1":
+                    if not t2_selected_vid:
+                        st.error("Lỗi: Chưa chọn video từ Thư viện!")
+                        st.stop()
+                    shutil.copy(os.path.join(OUTPUT_DIR, t2_selected_vid), current_render_video)
+                else:
+                    if not t2_uploaded:
+                        st.error("Lỗi: Chưa tải video mới lên từ máy!")
+                        st.stop()
+                    with open(current_render_video, "wb") as f:
+                        f.write(t2_uploaded.getbuffer())
+
                 parsed_data = parse_srt_to_dict(t2_edited)
                 sorted_audios = sorted(t2_audios, key=lambda x: x.name) if t2_audios else []
                 
@@ -510,7 +538,7 @@ with tab2:
                 create_ass_file(t2_edited, "t2_sub.ass", t2_display_mode, t2_outline, t2_font)
                 ass_abspath = os.path.abspath("t2_sub.ass").replace('\\', '/').replace(':', '\\:')
                 
-                cmd = ["ffmpeg", "-y", "-i", st.session_state.t2_temp_video_path]
+                cmd = ["ffmpeg", "-y", "-i", current_render_video]
                 
                 mapped_count = min(len(parsed_data), len(sorted_audios))
                 
