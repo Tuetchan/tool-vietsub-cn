@@ -7,7 +7,7 @@ import re
 import subprocess
 import pandas as pd
 import shutil
-import gc # Thư viện dọn rác bộ nhớ
+import gc
 
 st.set_page_config(page_title="Auto Vietsub & Dubbing Studio", page_icon="🎬", layout="wide")
 st.title("🎬 Studio Vietsub & Lồng Tiếng Phim Trung Quốc")
@@ -59,7 +59,7 @@ def cleanup_files(*filepaths):
                 os.remove(path)
             except Exception:
                 pass
-    gc.collect() # Ép xả RAM sau khi xóa file
+    gc.collect()
 
 def extract_clean_url(text):
     url_match = re.search(r'https?://[^\s]+', text)
@@ -67,7 +67,6 @@ def extract_clean_url(text):
         return url_match.group(0)
     return text.strip()
 
-# Hàm lấy thời lượng video để biết đường cắt
 def get_video_duration(video_path):
     try:
         result = subprocess.run(["ffprobe", "-v", "error", "-show_entries",
@@ -99,6 +98,7 @@ def adjust_time_str(time_str, offset_sec):
     return f"{new_h:02d}:{new_m:02d}:{new_s:06.3f}".replace('.', ',')
 
 def apply_timing_offsets(srt_text, start_offset, end_offset):
+    srt_text = srt_text.replace('\r', '')
     blocks = re.split(r'\n\s*\n', srt_text.strip())
     new_blocks = []
     for block in blocks:
@@ -113,6 +113,7 @@ def apply_timing_offsets(srt_text, start_offset, end_offset):
     return '\n\n'.join(new_blocks)
 
 def shift_srt_timestamps(srt_text, offset_sec):
+    srt_text = srt_text.replace('\r', '')
     blocks = re.split(r'\n\s*\n', srt_text.strip())
     new_blocks = []
     for block in blocks:
@@ -126,7 +127,9 @@ def shift_srt_timestamps(srt_text, offset_sec):
         new_blocks.append('\n'.join(lines))
     return '\n\n'.join(new_blocks)
 
+# ĐÃ FIX: Chống lỗi \r\n khi paste từ Windows
 def renumber_srt_blocks(srt_text):
+    srt_text = srt_text.replace('\r', '')
     blocks = re.split(r'\n\s*\n', srt_text.strip())
     new_blocks = []
     idx = 1
@@ -269,7 +272,9 @@ def time_to_ms(time_str):
         return 0
     return int((h * 3600 + m * 60 + s) * 1000)
 
+# ĐÃ FIX: Chống lỗi khi Paste SRT có ký tự lạ
 def parse_srt_to_dict(srt_text):
+    srt_text = srt_text.replace('\r', '')
     blocks = re.split(r'\n\s*\n', srt_text.strip())
     parsed = []
     for idx, block in enumerate(blocks):
@@ -374,7 +379,6 @@ with tab1:
                     with yt_dlp.YoutubeDL({'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best', 'outtmpl': temp_video, 'quiet': True}) as ydl:
                         ydl.download([clean_url])
                 
-                st.session_state.t1_temp_video_path = temp_video
                 total_duration = get_video_duration(temp_video)
                 chunk_sec = int(t1_chunk_duration * 60)
                 full_srt_text = ""
@@ -408,12 +412,13 @@ with tab1:
                             
                         res = model.generate_content([prompt, uploaded_v])
                         chunk_srt = res.text.strip().replace('```srt', '').replace('```', '').strip()
+                        
                         shifted_srt = shift_srt_timestamps(chunk_srt, start_time_sec)
                         full_srt_text += shifted_srt + "\n\n"
                         
                         genai.delete_file(uploaded_v.name)
                         os.remove(chunk_file)
-                        gc.collect() # Dọn RAM ngay lập tức
+                        gc.collect()
                         progress_bar.progress((i+1)/len(chunks))
                         
                     full_srt_text = renumber_srt_blocks(full_srt_text)
@@ -433,7 +438,6 @@ with tab1:
                     st.success("Xong Bước 1!")
 
                 st.session_state.t1_srt_content = full_srt_text
-                st.session_state.t1_area = full_srt_text 
             except Exception as e:
                 st.error(f"Lỗi: {e}")
             finally:
@@ -445,7 +449,7 @@ with tab1:
     with col_t1: t1_s_off = st.number_input("⏳ Sớm hơn (s):", value=-0.1, step=0.1, key="t1_s_off")
     with col_t2: t1_e_off = st.number_input("⏳ Nán lại (s):", value=0.5, step=0.1, key="t1_e_off")
     
-    t1_edited = st.text_area("Chỉnh sửa phụ đề SRT:", value=st.session_state.t1_srt_content, height=300, key="t1_area")
+    t1_edited = st.text_area("Chỉnh sửa phụ đề SRT (Có thể dán đè):", value=st.session_state.t1_srt_content, height=300, key="t1_area")
     
     if st.button("🎬 Xác nhận & Ghép Vietsub", key="t1_btn2"):
         if not t1_edited.strip():
@@ -485,7 +489,7 @@ with tab1:
             cmd.append(out_vid)
             
             subprocess.run(cmd, check=True)
-            st.success("Xong! Cuộn xuống cuối trang để tải video. Bạn có thể yên tâm video cuối cùng hoàn toàn liền mạch!")
+            st.success("Xong! Cuộn xuống cuối trang để tải video.")
             gc.collect()
             st.rerun()
 
@@ -510,7 +514,7 @@ with tab2:
     else:
         t2_uploaded = st.file_uploader("Tải video lên:", type=["mp4", "mov"], key="t2_up")
 
-    st.subheader("2️⃣ Quét Phụ Đề Gốc")
+    st.subheader("2️⃣ Quét Phụ Đề Gốc (BỎ QUA nếu đã có sẵn SRT)")
     t2_ai_mode = st.radio("🧠 Chọn chế độ AI lồng tiếng:", ("Quét Tiếng Trung & Dịch Tiếng Việt (Tự động)", "Chỉ chép Tiếng Trung & Thời gian (Dịch thủ công)"))
     
     t2_split_video = st.checkbox("✂️ Tự động chia nhỏ video để AI không bỏ sót chữ (Khuyên dùng)", value=True, key="t2_split")
@@ -535,7 +539,6 @@ with tab2:
                     st.error("Chưa có video để quét!")
                     st.stop()
                 
-                st.session_state.t2_temp_video_path = temp_video
                 total_duration = get_video_duration(temp_video)
                 chunk_sec = int(t2_chunk_duration * 60)
                 full_srt_text = ""
@@ -573,7 +576,7 @@ with tab2:
                         
                         genai.delete_file(uploaded_v.name)
                         os.remove(chunk_file)
-                        gc.collect() # Dọn rác
+                        gc.collect() 
                         progress_bar.progress((i+1)/len(chunks))
                         
                     full_srt_text = renumber_srt_blocks(full_srt_text)
@@ -592,7 +595,6 @@ with tab2:
                     st.success("Xong Bước 2!")
                 
                 st.session_state.t2_srt_content = full_srt_text
-                st.session_state.t2_area = full_srt_text
             except Exception as e:
                 st.error(f"Lỗi: {e}")
             finally:
@@ -601,7 +603,7 @@ with tab2:
     st.divider()
     st.subheader("3️⃣ Chỉnh sửa Dịch thuật & Tải Audio")
     
-    t2_edited = st.text_area("Bảng 1: Sửa chữ & Thời gian (SRT):", value=st.session_state.t2_srt_content, height=250, key="t2_area")
+    t2_edited = st.text_area("Bảng 1: Sửa chữ & Thời gian (Dán trực tiếp SRT của bạn vào đây):", value=st.session_state.t2_srt_content, height=250, key="t2_area")
     
     col_info, col_clear_audio = st.columns([8, 2])
     with col_info:
@@ -664,7 +666,7 @@ with tab2:
 
     if st.button("🎬 KẾT HỢP & XUẤT VIDEO LỒNG TIẾNG", type="primary"):
         if not t2_edited.strip():
-            st.error("Bảng SRT đang trống! Hãy quét AI hoặc dán SRT của bạn vào Bước 3.")
+            st.error("Bảng SRT đang trống! Bạn hãy dán SRT vào Bước 3.")
         else:
             try:
                 st.info("Đang chuẩn bị video nguồn để ghép...")
@@ -678,7 +680,7 @@ with tab2:
                     shutil.copy(os.path.join(OUTPUT_DIR, t2_selected_vid), current_render_video)
                 else:
                     if not t2_uploaded:
-                        st.error("Lỗi: Chưa tải video mới lên từ máy!")
+                        st.error("Lỗi: Chưa tải video mới lên từ máy ở Bước 1!")
                         st.stop()
                     with open(current_render_video, "wb") as f:
                         f.write(t2_uploaded.getbuffer())
@@ -743,10 +745,12 @@ with tab2:
                 
                 subprocess.run(cmd, check=True)
                 st.success("🎉 Xuất Video Lồng Tiếng Thành Công!")
-                gc.collect() # Dọn rác
+                gc.collect()
                 st.rerun()
             except Exception as e:
                 st.error(f"Lỗi render: {e}")
+            finally:
+                gc.collect()
 
 # ==========================================
 # BƯỚC 3: QUẢN LÝ LỊCH SỬ VIDEO ĐÃ TẠO
