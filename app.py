@@ -65,6 +65,17 @@ def extract_clean_url(text):
         return url_match.group(0)
     return text.strip()
 
+# Hàm lấy thời lượng video để biết đường cắt
+def get_video_duration(video_path):
+    try:
+        result = subprocess.run(["ffprobe", "-v", "error", "-show_entries",
+                                 "format=duration", "-of",
+                                 "default=noprint_wrappers=1:nokey=1", video_path],
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        return float(result.stdout.strip())
+    except Exception:
+        return 0.0
+
 def adjust_time_str(time_str, offset_sec):
     time_str = time_str.replace(',', '.')
     parts = time_str.split(':')
@@ -97,6 +108,32 @@ def apply_timing_offsets(srt_text, start_offset, end_offset):
                 new_end = adjust_time_str(time_match.group(2), end_offset)
                 lines[1] = f"{new_start} --> {new_end}"
         new_blocks.append('\n'.join(lines))
+    return '\n\n'.join(new_blocks)
+
+def shift_srt_timestamps(srt_text, offset_sec):
+    blocks = re.split(r'\n\s*\n', srt_text.strip())
+    new_blocks = []
+    for block in blocks:
+        lines = block.strip().split('\n')
+        if len(lines) >= 3:
+            time_match = re.match(r'((?:\d{1,2}:)?\d{1,2}:\d{1,2}(?:[,\.]\d{1,3})?)\s*-->\s*((?:\d{1,2}:)?\d{1,2}:\d{1,2}(?:[,\.]\d{1,3})?)', lines[1].strip())
+            if time_match:
+                new_start = adjust_time_str(time_match.group(1), offset_sec)
+                new_end = adjust_time_str(time_match.group(2), offset_sec)
+                lines[1] = f"{new_start} --> {new_end}"
+        new_blocks.append('\n'.join(lines))
+    return '\n\n'.join(new_blocks)
+
+def renumber_srt_blocks(srt_text):
+    blocks = re.split(r'\n\s*\n', srt_text.strip())
+    new_blocks = []
+    idx = 1
+    for block in blocks:
+        lines = block.strip().split('\n')
+        if len(lines) >= 3:
+            lines[0] = str(idx)
+            new_blocks.append('\n'.join(lines))
+            idx += 1
     return '\n\n'.join(new_blocks)
 
 def filter_only_vietnamese_srt(srt_text):
@@ -241,14 +278,12 @@ def parse_srt_to_dict(srt_text):
 # TẠO 2 TABS
 tab1, tab2 = st.tabs(["🎬 Tự Động Vietsub (Tiêu Chuẩn)", "🎙️ CapCut Studio (Lồng Tiếng & Audio)"])
 
-# --- PROMPT AI CỰC KỲ KHẮT KHE CHỐNG LƯỜI BIẾNG ---
 PROMPT_AUTO_TRANS = """Bạn là Cỗ Máy OCR và Dịch Thuật siêu việt. ĐỌC CHỮ TRÊN MÀN HÌNH VÀ NGHE ÂM THANH.
 QUY TẮC TỐI THƯỢNG (NẾU VI PHẠM SẼ BỊ PHẠT NẶNG):
-1. KHÔNG ĐƯỢC BỎ SÓT BẤT KỲ CÂU NÀO: Bạn phải quét và dịch từ giây 00:00:00 đến giây cuối cùng của video. Tuyệt đối không được tóm tắt, không được nhảy cóc, không được lười biếng. Cứ có chữ xuất hiện là phải tạo khối SRT.
-2. Bám sát 100% theo phụ đề gốc xuất hiện trên màn hình.
-3. TUYỆT ĐỐI KHÔNG GỘP CÂU THEO NGỮ NGHĨA! Mỗi khi dòng chữ trên màn hình thay đổi (chữ cũ biến mất, chữ mới hiện ra), BẠN BẮT BUỘC PHẢI TẠO MỘT KHỐI THỜI GIAN SRT MỚI.
-4. Độ dài câu dịch Tiếng Việt phải tương đương với chữ trên màn hình lúc đó, không được dịch dư.
-5. Đánh dấu [TOP], [MID], [BOTTOM] đầu câu tiếng Trung.
+1. KHÔNG ĐƯỢC BỎ SÓT BẤT KỲ CÂU NÀO.
+2. TUYỆT ĐỐI KHÔNG GỘP CÂU THEO NGỮ NGHĨA! Mỗi khi dòng chữ trên màn hình thay đổi, BẠN BẮT BUỘC PHẢI TẠO MỘT KHỐI THỜI GIAN SRT MỚI.
+3. Độ dài câu dịch Tiếng Việt phải tương đương với chữ trên màn hình lúc đó, không được dịch dư.
+4. Đánh dấu [TOP], [MID], [BOTTOM] đầu câu tiếng Trung.
 Định dạng SRT chuẩn:
 1
 00:00:01,000 --> 00:00:03,000
@@ -257,7 +292,7 @@ Tiếng Việt"""
 
 PROMPT_ONLY_OCR = """Bạn là Cỗ Máy OCR siêu việt. CHỈ ĐỌC CHỮ CỨNG TRÊN MÀN HÌNH, BỎ QUA HOÀN TOÀN ÂM THANH, KHÔNG DỊCH.
 QUY TẮC TỐI THƯỢNG (NẾU VI PHẠM SẼ BỊ PHẠT NẶNG):
-1. KHÔNG ĐƯỢC BỎ SÓT BẤT KỲ DÒNG CHỮ NÀO: Bạn phải chép lại từ giây 00:00:00 đến giây cuối cùng của video. Tuyệt đối không nhảy cóc, không lười biếng. Khung hình có bao nhiêu chữ chép ra bấy nhiêu khối thời gian riêng biệt.
+1. KHÔNG ĐƯỢC BỎ SÓT BẤT KỲ DÒNG CHỮ NÀO.
 2. TUYỆT ĐỐI KHÔNG GỘP CÂU! Màn hình hiện bao nhiêu chữ, chép đúng bấy nhiêu. 
 3. Cứ mỗi lần dòng chữ trên màn hình đổi cảnh, BẠN PHẢI NGẮT MỐC THỜI GIAN VÀ TẠO KHỐI SRT MỚI NGAY LẬP TỨC. Không được nối 2 màn hình chữ lại với nhau làm một.
 4. Đánh dấu [TOP], [MID], [BOTTOM] đầu câu tiếng Trung.
@@ -295,11 +330,12 @@ with tab1:
         t1_uploaded = st.file_uploader("Chọn video:", type=["mp4", "mov", "mkv", "avi", "webm"], key="t1_up")
     else:
         t1_raw_link = st.text_input("Nhập link video:", key="t1_link")
-
-    t1_ai_mode = st.radio(
-        "🧠 Chọn chế độ AI:", 
-        ("Quét Tiếng Trung & Dịch Tiếng Việt (Tự động)", "Chỉ chép Tiếng Trung & Thời gian (Dịch thủ công)")
-    )
+        
+    st.markdown("**🧠 Tùy chỉnh sức mạnh AI:**")
+    t1_ai_mode = st.radio("Chế độ AI:", ("Quét Tiếng Trung & Dịch Tiếng Việt (Tự động)", "Chỉ chép Tiếng Trung & Thời gian (Dịch thủ công)"))
+    
+    t1_split_video = st.checkbox("✂️ Tự động chia nhỏ video để AI không bỏ sót chữ (Khuyên dùng cho video > 3 phút)", value=True)
+    t1_chunk_duration = st.number_input("⏱ Độ dài mỗi đoạn cắt (Phút):", min_value=1, max_value=10, value=3)
 
     if st.button("🚀 Bắt đầu phân tích Video & Dịch", key="t1_btn1"):
         if not api_key:
@@ -319,29 +355,72 @@ with tab1:
                     with yt_dlp.YoutubeDL({'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best', 'outtmpl': temp_video, 'quiet': True}) as ydl:
                         ydl.download([clean_url])
                 
-                st.info("Đang tải Video lên AI...")
-                uploaded_v = genai.upload_file(path=temp_video)
-                while uploaded_v.state.name == "PROCESSING":
-                    time.sleep(3)
-                    uploaded_v = genai.get_file(uploaded_v.name)
-
-                st.info("⚡ AI đang quét. Vui lòng kiên nhẫn nếu video dài...")
+                st.session_state.t1_temp_video_path = temp_video
                 
+                total_duration = get_video_duration(temp_video)
+                chunk_sec = int(t1_chunk_duration * 60)
+                full_srt_text = ""
                 prompt = PROMPT_AUTO_TRANS if t1_ai_mode == "Quét Tiếng Trung & Dịch Tiếng Việt (Tự động)" else PROMPT_ONLY_OCR
+
+                if t1_split_video and total_duration > chunk_sec:
+                    st.info(f"Đang chuẩn bị cắt video ({total_duration/60:.1f} phút) thành các phần nhỏ để hỗ trợ AI...")
+                    chunks = []
+                    start_t = 0
+                    idx = 0
+                    
+                    while start_t < total_duration:
+                        chunk_name = f"t1_chunk_{idx}.mp4"
+                        cmd = ["ffmpeg", "-y", "-i", temp_video, "-ss", str(start_t), "-t", str(chunk_sec), "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", chunk_name]
+                        subprocess.run(cmd, check=True)
+                        chunks.append((chunk_name, start_t))
+                        start_t += chunk_sec
+                        idx += 1
+                        
+                    # HIỂN THỊ DANH SÁCH ĐÃ CẮT CHO NGƯỜI DÙNG DỄ KIỂM SOÁT
+                    st.markdown("📁 **Danh sách các đoạn video nháp đã được gửi đi phân tích:**")
+                    for i, (chunk_file, start_time_sec) in enumerate(chunks):
+                        st.write(f"▫️ **Phần {i+1}**: Từ giây thứ {start_time_sec} đến giây thứ {min(start_time_sec + chunk_sec, total_duration)}")
+
+                    progress_bar = st.progress(0)
+                    for i, (chunk_file, start_time_sec) in enumerate(chunks):
+                        st.write(f"⏳ AI đang xử lý phần {i+1}/{len(chunks)}...")
+                        uploaded_v = genai.upload_file(path=chunk_file)
+                        while uploaded_v.state.name == "PROCESSING":
+                            time.sleep(3)
+                            uploaded_v = genai.get_file(uploaded_v.name)
+                            
+                        res = model.generate_content([prompt, uploaded_v])
+                        chunk_srt = res.text.strip().replace('```srt', '').replace('```', '').strip()
+                        
+                        shifted_srt = shift_srt_timestamps(chunk_srt, start_time_sec)
+                        full_srt_text += shifted_srt + "\n\n"
+                        
+                        genai.delete_file(uploaded_v.name)
+                        os.remove(chunk_file)
+                        progress_bar.progress((i+1)/len(chunks))
+                        
+                    full_srt_text = renumber_srt_blocks(full_srt_text)
+                    st.success("🎉 AI đã xử lý xong! Tất cả phụ đề sẽ được tự động ghép nối chuẩn xác vào video gốc nguyên vẹn của bạn.")
                 
-                res = model.generate_content([prompt, uploaded_v])
-                new_text = res.text.strip().replace('```srt', '').replace('```', '').strip()
-                
-                st.session_state.t1_srt_content = new_text
-                st.session_state.t1_area = new_text 
-                
-                genai.delete_file(uploaded_v.name)
-                st.success("Xong Bước 1!")
+                else:
+                    st.info("Đang tải Video lên AI...")
+                    uploaded_v = genai.upload_file(path=temp_video)
+                    while uploaded_v.state.name == "PROCESSING":
+                        time.sleep(3)
+                        uploaded_v = genai.get_file(uploaded_v.name)
+                    st.info("⚡ AI đang quét...")
+                    res = model.generate_content([prompt, uploaded_v])
+                    full_srt_text = res.text.strip().replace('```srt', '').replace('```', '').strip()
+                    genai.delete_file(uploaded_v.name)
+                    st.success("Xong Bước 1!")
+
+                st.session_state.t1_srt_content = full_srt_text
+                st.session_state.t1_area = full_srt_text 
             except Exception as e:
                 st.error(f"Lỗi: {e}")
 
     st.divider()
-    st.subheader("📝 Bước 2: Đối chiếu & Sửa bản dịch (Có thể dán thẳng SRT vào đây)")
+    st.subheader("📝 Bước 2: Đối chiếu & Sửa bản dịch")
     col_t1, col_t2 = st.columns(2)
     with col_t1: t1_s_off = st.number_input("⏳ Sớm hơn (s):", value=-0.1, step=0.1, key="t1_s_off")
     with col_t2: t1_e_off = st.number_input("⏳ Nán lại (s):", value=0.5, step=0.1, key="t1_e_off")
@@ -352,7 +431,7 @@ with tab1:
         if not t1_edited.strip():
             st.error("Nội dung phụ đề đang trống! Vui lòng cho AI quét hoặc tự dán SRT vào bảng trên.")
         else:
-            st.info("Đang chuẩn bị video nguồn để ghép...")
+            st.info("Đang lấy video GỐC NGUYÊN VẸN để ốp phụ đề lên...")
             current_render_video = "t1_render_source.mp4"
             cleanup_files(current_render_video, "t1_sub.srt", "t1_sub.ass")
 
@@ -384,7 +463,7 @@ with tab1:
             cmd.append(out_vid)
             
             subprocess.run(cmd, check=True)
-            st.success("Xong! Cuộn xuống cuối trang để tải video.")
+            st.success("Xong! Cuộn xuống cuối trang để tải video. Bạn có thể yên tâm video cuối cùng hoàn toàn liền mạch!")
             st.rerun()
 
 # ==========================================
@@ -408,11 +487,11 @@ with tab2:
     else:
         t2_uploaded = st.file_uploader("Tải video lên:", type=["mp4", "mov"], key="t2_up")
 
-    st.subheader("2️⃣ Quét Phụ Đề Gốc (Chỉ đọc chữ)")
-    t2_ai_mode = st.radio(
-        "🧠 Chọn chế độ AI lồng tiếng:", 
-        ("Quét Tiếng Trung & Dịch Tiếng Việt (Tự động)", "Chỉ chép Tiếng Trung & Thời gian (Dịch thủ công)")
-    )
+    st.subheader("2️⃣ Quét Phụ Đề Gốc")
+    t2_ai_mode = st.radio("🧠 Chọn chế độ AI lồng tiếng:", ("Quét Tiếng Trung & Dịch Tiếng Việt (Tự động)", "Chỉ chép Tiếng Trung & Thời gian (Dịch thủ công)"))
+    
+    t2_split_video = st.checkbox("✂️ Tự động chia nhỏ video để AI không bỏ sót chữ (Khuyên dùng)", value=True, key="t2_split")
+    t2_chunk_duration = st.number_input("⏱ Độ dài mỗi đoạn cắt (Phút):", min_value=1, max_value=10, value=3, key="t2_chunk")
     
     if st.button("🚀 Quét Phụ Đề (OCR)", key="t2_btn1"):
         if not api_key:
@@ -433,24 +512,62 @@ with tab2:
                     st.error("Chưa có video để quét!")
                     st.stop()
                 
-                st.info("Đang tải Video lên AI...")
-                uploaded_v = genai.upload_file(path=temp_video)
-                while uploaded_v.state.name == "PROCESSING":
-                    time.sleep(3)
-                    uploaded_v = genai.get_file(uploaded_v.name)
-
-                st.info("⚡ Đang quét Text (Không nghe âm thanh). Vui lòng kiên nhẫn nếu video dài...")
-                
+                st.session_state.t2_temp_video_path = temp_video
+                total_duration = get_video_duration(temp_video)
+                chunk_sec = int(t2_chunk_duration * 60)
+                full_srt_text = ""
                 prompt = PROMPT_AUTO_TRANS if t2_ai_mode == "Quét Tiếng Trung & Dịch Tiếng Việt (Tự động)" else PROMPT_ONLY_OCR
+
+                if t2_split_video and total_duration > chunk_sec:
+                    st.info(f"Đang chuẩn bị cắt video ({total_duration/60:.1f} phút) thành các phần nhỏ để hỗ trợ AI...")
+                    chunks = []
+                    start_t = 0
+                    idx = 0
+                    while start_t < total_duration:
+                        chunk_name = f"t2_chunk_{idx}.mp4"
+                        cmd = ["ffmpeg", "-y", "-i", temp_video, "-ss", str(start_t), "-t", str(chunk_sec), "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", chunk_name]
+                        subprocess.run(cmd, check=True)
+                        chunks.append((chunk_name, start_t))
+                        start_t += chunk_sec
+                        idx += 1
+                        
+                    st.markdown("📁 **Danh sách các đoạn video nháp đã được gửi đi phân tích:**")
+                    for i, (chunk_file, start_time_sec) in enumerate(chunks):
+                        st.write(f"▫️ **Phần {i+1}**: Từ giây thứ {start_time_sec} đến giây thứ {min(start_time_sec + chunk_sec, total_duration)}")
+
+                    progress_bar = st.progress(0)
+                    for i, (chunk_file, start_time_sec) in enumerate(chunks):
+                        st.write(f"⏳ AI đang xử lý phần {i+1}/{len(chunks)}...")
+                        uploaded_v = genai.upload_file(path=chunk_file)
+                        while uploaded_v.state.name == "PROCESSING":
+                            time.sleep(3)
+                            uploaded_v = genai.get_file(uploaded_v.name)
+                            
+                        res = model.generate_content([prompt, uploaded_v])
+                        chunk_srt = res.text.strip().replace('```srt', '').replace('```', '').strip()
+                        shifted_srt = shift_srt_timestamps(chunk_srt, start_time_sec)
+                        full_srt_text += shifted_srt + "\n\n"
+                        
+                        genai.delete_file(uploaded_v.name)
+                        os.remove(chunk_file)
+                        progress_bar.progress((i+1)/len(chunks))
+                        
+                    full_srt_text = renumber_srt_blocks(full_srt_text)
+                    st.success("🎉 AI đã xử lý xong! Tất cả phụ đề sẽ được ghép chuẩn xác lên video gốc.")
+                else:
+                    st.info("Đang tải Video lên AI...")
+                    uploaded_v = genai.upload_file(path=temp_video)
+                    while uploaded_v.state.name == "PROCESSING":
+                        time.sleep(3)
+                        uploaded_v = genai.get_file(uploaded_v.name)
+                    st.info("⚡ Đang quét Text...")
+                    res = model.generate_content([prompt, uploaded_v])
+                    full_srt_text = res.text.strip().replace('```srt', '').replace('```', '').strip()
+                    genai.delete_file(uploaded_v.name)
+                    st.success("Xong Bước 2!")
                 
-                res = model.generate_content([prompt, uploaded_v])
-                new_text = res.text.strip().replace('```srt', '').replace('```', '').strip()
-                
-                st.session_state.t2_srt_content = new_text
-                st.session_state.t2_area = new_text
-                
-                genai.delete_file(uploaded_v.name)
-                st.success("Xong Bước 2!")
+                st.session_state.t2_srt_content = full_srt_text
+                st.session_state.t2_area = full_srt_text
             except Exception as e:
                 st.error(f"Lỗi: {e}")
 
@@ -510,7 +627,7 @@ with tab2:
             st.error("Bảng SRT đang trống! Hãy quét AI hoặc dán SRT của bạn vào Bước 3.")
         else:
             try:
-                st.info("Đang chuẩn bị video nguồn để ghép...")
+                st.info("Đang lấy video GỐC NGUYÊN VẸN để ghép phụ đề và âm thanh...")
                 current_render_video = "t2_render_source.mp4"
                 cleanup_files(current_render_video, "t2_sub.ass")
 
@@ -571,7 +688,7 @@ with tab2:
                     ])
                 
                 subprocess.run(cmd, check=True)
-                st.success("🎉 Xuất Video Lồng Tiếng Thành Công!")
+                st.success("🎉 Xuất Video Lồng Tiếng Thành Công! Bạn yên tâm video tải về dưới đây là bản gốc dính liền, không hề bị rách.")
                 st.rerun()
             except Exception as e:
                 st.error(f"Lỗi render: {e}")
