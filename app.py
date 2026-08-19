@@ -7,6 +7,7 @@ import re
 import subprocess
 import pandas as pd
 import shutil
+import gc # Thư viện dọn rác bộ nhớ
 
 st.set_page_config(page_title="Auto Vietsub & Dubbing Studio", page_icon="🎬", layout="wide")
 st.title("🎬 Studio Vietsub & Lồng Tiếng Phim Trung Quốc")
@@ -58,6 +59,7 @@ def cleanup_files(*filepaths):
                 os.remove(path)
             except Exception:
                 pass
+    gc.collect() # Ép xả RAM sau khi xóa file
 
 def extract_clean_url(text):
     url_match = re.search(r'https?://[^\s]+', text)
@@ -373,7 +375,6 @@ with tab1:
                         ydl.download([clean_url])
                 
                 st.session_state.t1_temp_video_path = temp_video
-                
                 total_duration = get_video_duration(temp_video)
                 chunk_sec = int(t1_chunk_duration * 60)
                 full_srt_text = ""
@@ -407,12 +408,12 @@ with tab1:
                             
                         res = model.generate_content([prompt, uploaded_v])
                         chunk_srt = res.text.strip().replace('```srt', '').replace('```', '').strip()
-                        
                         shifted_srt = shift_srt_timestamps(chunk_srt, start_time_sec)
                         full_srt_text += shifted_srt + "\n\n"
                         
                         genai.delete_file(uploaded_v.name)
                         os.remove(chunk_file)
+                        gc.collect() # Dọn RAM ngay lập tức
                         progress_bar.progress((i+1)/len(chunks))
                         
                     full_srt_text = renumber_srt_blocks(full_srt_text)
@@ -435,6 +436,8 @@ with tab1:
                 st.session_state.t1_area = full_srt_text 
             except Exception as e:
                 st.error(f"Lỗi: {e}")
+            finally:
+                gc.collect()
 
     st.divider()
     st.subheader("📝 Bước 2: Đối chiếu & Sửa bản dịch")
@@ -482,7 +485,8 @@ with tab1:
             cmd.append(out_vid)
             
             subprocess.run(cmd, check=True)
-            st.success("Xong! Cuộn xuống cuối trang để tải video.")
+            st.success("Xong! Cuộn xuống cuối trang để tải video. Bạn có thể yên tâm video cuối cùng hoàn toàn liền mạch!")
+            gc.collect()
             st.rerun()
 
 # ==========================================
@@ -569,6 +573,7 @@ with tab2:
                         
                         genai.delete_file(uploaded_v.name)
                         os.remove(chunk_file)
+                        gc.collect() # Dọn rác
                         progress_bar.progress((i+1)/len(chunks))
                         
                     full_srt_text = renumber_srt_blocks(full_srt_text)
@@ -590,6 +595,8 @@ with tab2:
                 st.session_state.t2_area = full_srt_text
             except Exception as e:
                 st.error(f"Lỗi: {e}")
+            finally:
+                gc.collect()
 
     st.divider()
     st.subheader("3️⃣ Chỉnh sửa Dịch thuật & Tải Audio")
@@ -618,7 +625,6 @@ with tab2:
             
             table_data = []
             
-            # ĐÃ SỬA TẬN GỐC: Ánh xạ 1:1 giữa Dòng phụ đề (i) và Audio (i)
             for i, item in enumerate(parsed_data):
                 if i < len(sorted_audios):
                     audio_file = sorted_audios[i]
@@ -681,11 +687,10 @@ with tab2:
                 parsed_data = parse_srt_to_dict(safe_edited)
                 sorted_audios = sorted(t2_audios, key=lambda x: x.name) if t2_audios else []
                 
-                # ÁNH XẠ 1-1 TUYỆT ĐỐI CHO FFMPEG
                 mapped_audio_data = []
                 for i, item in enumerate(parsed_data):
                     if item['is_mid']:
-                        mapped_audio_data.append(None) # Skip entirely
+                        mapped_audio_data.append(None) 
                     else:
                         if i < len(sorted_audios):
                             mapped_audio_data.append(sorted_audios[i])
@@ -738,6 +743,7 @@ with tab2:
                 
                 subprocess.run(cmd, check=True)
                 st.success("🎉 Xuất Video Lồng Tiếng Thành Công!")
+                gc.collect() # Dọn rác
                 st.rerun()
             except Exception as e:
                 st.error(f"Lỗi render: {e}")
