@@ -37,12 +37,16 @@ def get_saved_videos():
     files.sort(key=lambda x: os.path.getmtime(os.path.join(OUTPUT_DIR, x)), reverse=True)
     return files
 
-# Nhập API Key (Sẽ tự động điền key cũ nếu đã từng nhập)
+# Nhập API Key
 saved_key = load_api_key()
 api_key = st.text_input("🔑 Nhập Gemini API Key của bạn:", type="password", value=saved_key)
 
 if api_key and api_key != saved_key:
     save_api_key(api_key)
+
+# Biến session để reset danh sách audio
+if "audio_uploader_key" not in st.session_state:
+    st.session_state.audio_uploader_key = "audio_uploader_0"
 
 st.divider()
 
@@ -237,6 +241,30 @@ def parse_srt_to_dict(srt_text):
 # TẠO 2 TABS
 tab1, tab2 = st.tabs(["🎬 Tự Động Vietsub (Tiêu Chuẩn)", "🎙️ CapCut Studio (Lồng Tiếng & Audio)"])
 
+# --- PROMPT AI CỰC KỲ KHẮT KHE (ÉP THEO TỪNG CẢNH MÀN HÌNH) ---
+PROMPT_AUTO_TRANS = """Bạn là Cỗ Máy OCR. ĐỌC CHỮ TRÊN MÀN HÌNH VÀ NGHE ÂM THANH.
+QUY TẮC CẮT CÂU (QUAN TRỌNG TỐI THƯỢNG):
+1. Bám sát 100% theo phụ đề gốc xuất hiện trên màn hình.
+2. TUYỆT ĐỐI KHÔNG GỘP CÂU THEO NGỮ NGHĨA! Mỗi khi dòng chữ trên màn hình thay đổi (chữ cũ biến mất, chữ mới hiện ra), BẠN BẮT BUỘC PHẢI TẠO MỘT KHỐI THỜI GIAN SRT MỚI.
+3. Độ dài câu dịch Tiếng Việt phải tương đương với chữ trên màn hình lúc đó, không được dịch dư.
+4. Đánh dấu [TOP], [MID], [BOTTOM] đầu câu tiếng Trung.
+Định dạng SRT chuẩn:
+1
+00:00:01,000 --> 00:00:03,000
+[BOTTOM] Tiếng Trung
+Tiếng Việt"""
+
+PROMPT_ONLY_OCR = """Bạn là Cỗ Máy OCR. CHỈ ĐỌC CHỮ CỨNG TRÊN MÀN HÌNH, BỎ QUA HOÀN TOÀN ÂM THANH, KHÔNG DỊCH.
+QUY TẮC CẮT CÂU (QUAN TRỌNG TỐI THƯỢNG):
+1. TUYỆT ĐỐI KHÔNG GỘP CÂU! Màn hình hiện bao nhiêu chữ, chép đúng bấy nhiêu. 
+2. Cứ mỗi lần dòng chữ trên màn hình đổi cảnh, BẠN PHẢI NGẮT MỐC THỜI GIAN VÀ TẠO KHỐI SRT MỚI NGAY LẬP TỨC. Không được nối 2 màn hình chữ lại với nhau.
+3. Đánh dấu [TOP], [MID], [BOTTOM] đầu câu tiếng Trung.
+Định dạng SRT BẮT BUỘC:
+1
+00:00:01,000 --> 00:00:03,000
+[BOTTOM] Tiếng Trung Gốc
+[Nhập bản dịch Tiếng Việt vào đây]"""
+
 # ==========================================
 # TAB 1: AUTO VIETSUB (GIỮ NGUYÊN)
 # ==========================================
@@ -297,25 +325,7 @@ with tab1:
 
                 st.info("⚡ AI đang quét...")
                 
-                if t1_ai_mode == "Quét Tiếng Trung & Dịch Tiếng Việt (Tự động)":
-                    prompt = """Bạn là Cỗ Máy OCR. ĐỌC CHỮ TRÊN MÀN HÌNH VÀ NGHE ÂM THANH.
-                    1. KHÔNG GỘP CÂU. 
-                    2. Dòng tiếng Việt KHÔNG QUÁ 15 TỪ.
-                    3. Đánh dấu [TOP], [MID], [BOTTOM] đầu câu tiếng Trung.
-                    Định dạng SRT:
-                    1
-                    00:00:01,000 --> 00:00:03,000
-                    [BOTTOM] Tiếng Trung
-                    Tiếng Việt"""
-                else:
-                    prompt = """Bạn là Cỗ Máy OCR. CHỈ ĐỌC CHỮ TRÊN MÀN HÌNH, KHÔNG DỊCH.
-                    1. KHÔNG GỘP 2-3 CÂU VÀO MỘT MỐC THỜI GIAN. Cứ sang câu mới phải tạo mốc mới.
-                    2. Đánh dấu [TOP], [MID], [BOTTOM] đầu câu tiếng Trung.
-                    Định dạng SRT BẮT BUỘC:
-                    1
-                    00:00:01,000 --> 00:00:03,000
-                    [BOTTOM] Tiếng Trung Gốc
-                    [Nhập bản dịch Tiếng Việt vào đây]"""
+                prompt = PROMPT_AUTO_TRANS if t1_ai_mode == "Quét Tiếng Trung & Dịch Tiếng Việt (Tự động)" else PROMPT_ONLY_OCR
                 
                 res = model.generate_content([prompt, uploaded_v])
                 new_text = res.text.strip().replace('```srt', '').replace('```', '').strip()
@@ -336,7 +346,6 @@ with tab1:
     
     t1_edited = st.text_area("Chỉnh sửa phụ đề SRT:", value=st.session_state.t1_srt_content, height=300, key="t1_area")
     
-    # ĐÃ FIX: Logic xử lý Video gốc khi Render
     if st.button("🎬 Xác nhận & Ghép Vietsub", key="t1_btn2"):
         if not t1_edited.strip():
             st.error("Nội dung phụ đề đang trống! Vui lòng cho AI quét hoặc tự dán SRT vào bảng trên.")
@@ -345,7 +354,6 @@ with tab1:
             current_render_video = "t1_render_source.mp4"
             cleanup_files(current_render_video, "t1_sub.srt", "t1_sub.ass")
 
-            # BẮT BUỘC lấy đúng video người dùng vừa tải lên ở Bước 1
             if t1_option == "Tải tệp video từ máy":
                 if not t1_uploaded:
                     st.error("Lỗi: Bạn chưa tải video lên ở Bước 1!")
@@ -356,7 +364,6 @@ with tab1:
                 if not t1_raw_link:
                     st.error("Lỗi: Bạn chưa nhập link video ở Bước 1!")
                     st.stop()
-                # Tải video từ link về để ghép
                 with yt_dlp.YoutubeDL({'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best', 'outtmpl': current_render_video, 'quiet': True}) as ydl:
                     ydl.download([extract_clean_url(t1_raw_link)])
 
@@ -432,24 +439,7 @@ with tab2:
 
                 st.info("⚡ Đang quét Text (Không nghe âm thanh)...")
                 
-                if t2_ai_mode == "Quét Tiếng Trung & Dịch Tiếng Việt (Tự động)":
-                    prompt = """Bạn là Cỗ Máy OCR. CHỈ ĐỌC CHỮ TRÊN MÀN HÌNH, BỎ QUA HOÀN TOÀN ÂM THANH.
-                    1. KHÔNG GỘP CÂU.
-                    2. Dòng dịch tiếng Việt ngắn gọn.
-                    Định dạng SRT chuẩn:
-                    1
-                    00:00:01,000 --> 00:00:03,000
-                    [BOTTOM] Tiếng Trung
-                    Tiếng Việt"""
-                else:
-                    prompt = """Bạn là Cỗ Máy OCR. CHỈ ĐỌC CHỮ TRÊN MÀN HÌNH, KHÔNG DỊCH.
-                    1. KHÔNG GỘP 2-3 CÂU VÀO MỘT MỐC THỜI GIAN.
-                    2. Đánh dấu [TOP], [MID], [BOTTOM] đầu câu tiếng Trung.
-                    Định dạng SRT BẮT BUỘC:
-                    1
-                    00:00:01,000 --> 00:00:03,000
-                    [BOTTOM] Tiếng Trung Gốc
-                    [Nhập bản dịch Tiếng Việt vào đây]"""
+                prompt = PROMPT_AUTO_TRANS if t2_ai_mode == "Quét Tiếng Trung & Dịch Tiếng Việt (Tự động)" else PROMPT_ONLY_OCR
                 
                 res = model.generate_content([prompt, uploaded_v])
                 new_text = res.text.strip().replace('```srt', '').replace('```', '').strip()
@@ -467,8 +457,18 @@ with tab2:
     
     t2_edited = st.text_area("Bảng 1: Sửa chữ & Thời gian (SRT):", value=st.session_state.t2_srt_content, height=250, key="t2_area")
     
-    st.info("Bảng 2: Tải lên các file Audio lồng tiếng (Tên file theo thứ tự vd: 1.mp3, 2.mp3...). Tool sẽ tự khớp với các câu dịch ở trên.")
-    t2_audios = st.file_uploader("Tải lên danh sách Audio lồng tiếng:", type=["mp3", "wav", "m4a"], accept_multiple_files=True, key="t2_audios")
+    # NÚT XÓA TẤT CẢ AUDIO
+    col_info, col_clear_audio = st.columns([8, 2])
+    with col_info:
+        st.info("Bảng 2: Tải lên các file Audio lồng tiếng (Sẽ được ghép theo thứ tự thời gian ở bảng trên).")
+    with col_clear_audio:
+        if st.button("🗑️ Xóa tất cả Audio"):
+            # Thay đổi key của uploader để reset nó
+            st.session_state.audio_uploader_key = f"audio_uploader_{time.time()}"
+            st.rerun()
+
+    # File uploader dùng key động để có thể reset được
+    t2_audios = st.file_uploader("Tải lên danh sách Audio lồng tiếng:", type=["mp3", "wav", "m4a"], accept_multiple_files=True, key=st.session_state.audio_uploader_key)
     
     st.subheader("4️⃣ Bảng Tổng Hợp & Mix Âm Thanh")
     
@@ -506,7 +506,6 @@ with tab2:
         t2_font = st.number_input("Cỡ chữ:", value=28, key="t2_font")
         t2_outline = st.number_input("Hộp đen:", value=2, key="t2_outline")
 
-    # ĐÃ FIX: Logic xử lý Video gốc khi Render
     if st.button("🎬 KẾT HỢP & XUẤT VIDEO LỒNG TIẾNG", type="primary"):
         if not t2_edited.strip():
             st.error("Bảng SRT đang trống! Hãy quét AI hoặc dán SRT của bạn vào Bước 3.")
@@ -516,7 +515,6 @@ with tab2:
                 current_render_video = "t2_render_source.mp4"
                 cleanup_files(current_render_video, "t2_sub.ass")
 
-                # BẮT BUỘC lấy đúng video đang chọn ở Bước 1 ngay lúc này
                 if t2_vsource == "Chọn video đã lưu ở Tab 1":
                     if not t2_selected_vid:
                         st.error("Lỗi: Chưa chọn video từ Thư viện!")
