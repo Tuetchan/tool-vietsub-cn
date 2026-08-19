@@ -241,24 +241,26 @@ def parse_srt_to_dict(srt_text):
 # TẠO 2 TABS
 tab1, tab2 = st.tabs(["🎬 Tự Động Vietsub (Tiêu Chuẩn)", "🎙️ CapCut Studio (Lồng Tiếng & Audio)"])
 
-# --- PROMPT AI CỰC KỲ KHẮT KHE (ÉP THEO TỪNG CẢNH MÀN HÌNH) ---
-PROMPT_AUTO_TRANS = """Bạn là Cỗ Máy OCR. ĐỌC CHỮ TRÊN MÀN HÌNH VÀ NGHE ÂM THANH.
-QUY TẮC CẮT CÂU (QUAN TRỌNG TỐI THƯỢNG):
-1. Bám sát 100% theo phụ đề gốc xuất hiện trên màn hình.
-2. TUYỆT ĐỐI KHÔNG GỘP CÂU THEO NGỮ NGHĨA! Mỗi khi dòng chữ trên màn hình thay đổi (chữ cũ biến mất, chữ mới hiện ra), BẠN BẮT BUỘC PHẢI TẠO MỘT KHỐI THỜI GIAN SRT MỚI.
-3. Độ dài câu dịch Tiếng Việt phải tương đương với chữ trên màn hình lúc đó, không được dịch dư.
-4. Đánh dấu [TOP], [MID], [BOTTOM] đầu câu tiếng Trung.
+# --- PROMPT AI CỰC KỲ KHẮT KHE CHỐNG LƯỜI BIẾNG ---
+PROMPT_AUTO_TRANS = """Bạn là Cỗ Máy OCR và Dịch Thuật siêu việt. ĐỌC CHỮ TRÊN MÀN HÌNH VÀ NGHE ÂM THANH.
+QUY TẮC TỐI THƯỢNG (NẾU VI PHẠM SẼ BỊ PHẠT NẶNG):
+1. KHÔNG ĐƯỢC BỎ SÓT BẤT KỲ CÂU NÀO: Bạn phải quét và dịch từ giây 00:00:00 đến giây cuối cùng của video. Tuyệt đối không được tóm tắt, không được nhảy cóc, không được lười biếng. Cứ có chữ xuất hiện là phải tạo khối SRT.
+2. Bám sát 100% theo phụ đề gốc xuất hiện trên màn hình.
+3. TUYỆT ĐỐI KHÔNG GỘP CÂU THEO NGỮ NGHĨA! Mỗi khi dòng chữ trên màn hình thay đổi (chữ cũ biến mất, chữ mới hiện ra), BẠN BẮT BUỘC PHẢI TẠO MỘT KHỐI THỜI GIAN SRT MỚI.
+4. Độ dài câu dịch Tiếng Việt phải tương đương với chữ trên màn hình lúc đó, không được dịch dư.
+5. Đánh dấu [TOP], [MID], [BOTTOM] đầu câu tiếng Trung.
 Định dạng SRT chuẩn:
 1
 00:00:01,000 --> 00:00:03,000
 [BOTTOM] Tiếng Trung
 Tiếng Việt"""
 
-PROMPT_ONLY_OCR = """Bạn là Cỗ Máy OCR. CHỈ ĐỌC CHỮ CỨNG TRÊN MÀN HÌNH, BỎ QUA HOÀN TOÀN ÂM THANH, KHÔNG DỊCH.
-QUY TẮC CẮT CÂU (QUAN TRỌNG TỐI THƯỢNG):
-1. TUYỆT ĐỐI KHÔNG GỘP CÂU! Màn hình hiện bao nhiêu chữ, chép đúng bấy nhiêu. 
-2. Cứ mỗi lần dòng chữ trên màn hình đổi cảnh, BẠN PHẢI NGẮT MỐC THỜI GIAN VÀ TẠO KHỐI SRT MỚI NGAY LẬP TỨC. Không được nối 2 màn hình chữ lại với nhau.
-3. Đánh dấu [TOP], [MID], [BOTTOM] đầu câu tiếng Trung.
+PROMPT_ONLY_OCR = """Bạn là Cỗ Máy OCR siêu việt. CHỈ ĐỌC CHỮ CỨNG TRÊN MÀN HÌNH, BỎ QUA HOÀN TOÀN ÂM THANH, KHÔNG DỊCH.
+QUY TẮC TỐI THƯỢNG (NẾU VI PHẠM SẼ BỊ PHẠT NẶNG):
+1. KHÔNG ĐƯỢC BỎ SÓT BẤT KỲ DÒNG CHỮ NÀO: Bạn phải chép lại từ giây 00:00:00 đến giây cuối cùng của video. Tuyệt đối không nhảy cóc, không lười biếng. Khung hình có bao nhiêu chữ chép ra bấy nhiêu khối thời gian riêng biệt.
+2. TUYỆT ĐỐI KHÔNG GỘP CÂU! Màn hình hiện bao nhiêu chữ, chép đúng bấy nhiêu. 
+3. Cứ mỗi lần dòng chữ trên màn hình đổi cảnh, BẠN PHẢI NGẮT MỐC THỜI GIAN VÀ TẠO KHỐI SRT MỚI NGAY LẬP TỨC. Không được nối 2 màn hình chữ lại với nhau làm một.
+4. Đánh dấu [TOP], [MID], [BOTTOM] đầu câu tiếng Trung.
 Định dạng SRT BẮT BUỘC:
 1
 00:00:01,000 --> 00:00:03,000
@@ -323,7 +325,7 @@ with tab1:
                     time.sleep(3)
                     uploaded_v = genai.get_file(uploaded_v.name)
 
-                st.info("⚡ AI đang quét...")
+                st.info("⚡ AI đang quét. Vui lòng kiên nhẫn nếu video dài...")
                 
                 prompt = PROMPT_AUTO_TRANS if t1_ai_mode == "Quét Tiếng Trung & Dịch Tiếng Việt (Tự động)" else PROMPT_ONLY_OCR
                 
@@ -437,7 +439,7 @@ with tab2:
                     time.sleep(3)
                     uploaded_v = genai.get_file(uploaded_v.name)
 
-                st.info("⚡ Đang quét Text (Không nghe âm thanh)...")
+                st.info("⚡ Đang quét Text (Không nghe âm thanh). Vui lòng kiên nhẫn nếu video dài...")
                 
                 prompt = PROMPT_AUTO_TRANS if t2_ai_mode == "Quét Tiếng Trung & Dịch Tiếng Việt (Tự động)" else PROMPT_ONLY_OCR
                 
@@ -457,17 +459,14 @@ with tab2:
     
     t2_edited = st.text_area("Bảng 1: Sửa chữ & Thời gian (SRT):", value=st.session_state.t2_srt_content, height=250, key="t2_area")
     
-    # NÚT XÓA TẤT CẢ AUDIO
     col_info, col_clear_audio = st.columns([8, 2])
     with col_info:
         st.info("Bảng 2: Tải lên các file Audio lồng tiếng (Sẽ được ghép theo thứ tự thời gian ở bảng trên).")
     with col_clear_audio:
         if st.button("🗑️ Xóa tất cả Audio"):
-            # Thay đổi key của uploader để reset nó
             st.session_state.audio_uploader_key = f"audio_uploader_{time.time()}"
             st.rerun()
 
-    # File uploader dùng key động để có thể reset được
     t2_audios = st.file_uploader("Tải lên danh sách Audio lồng tiếng:", type=["mp3", "wav", "m4a"], accept_multiple_files=True, key=st.session_state.audio_uploader_key)
     
     st.subheader("4️⃣ Bảng Tổng Hợp & Mix Âm Thanh")
