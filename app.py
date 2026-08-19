@@ -267,7 +267,6 @@ with tab1:
     else:
         t1_raw_link = st.text_input("Nhập link video:", key="t1_link")
 
-    # ĐÃ THÊM: Tính năng chọn chế độ Quét AI
     t1_ai_mode = st.radio(
         "🧠 Chọn chế độ AI:", 
         ("Quét Tiếng Trung & Dịch Tiếng Việt (Tự động)", "Chỉ chép Tiếng Trung & Thời gian (Dịch thủ công)")
@@ -300,7 +299,6 @@ with tab1:
 
                 st.info("⚡ AI đang quét...")
                 
-                # Phân nhánh Prompt theo lựa chọn của bạn
                 if t1_ai_mode == "Quét Tiếng Trung & Dịch Tiếng Việt (Tự động)":
                     prompt = """Bạn là Cỗ Máy OCR. ĐỌC CHỮ TRÊN MÀN HÌNH VÀ NGHE ÂM THANH.
                     1. KHÔNG GỘP CÂU. 
@@ -322,13 +320,17 @@ with tab1:
                     [Nhập bản dịch Tiếng Việt vào đây]"""
                 
                 res = model.generate_content([prompt, uploaded_v])
-                st.session_state.t1_srt_content = res.text.strip().replace('```srt', '').replace('```', '').strip()
+                new_text = res.text.strip().replace('```srt', '').replace('```', '').strip()
+                
+                # --- ĐÃ SỬA: Ép giao diện cập nhật ngay lập tức ---
+                st.session_state.t1_srt_content = new_text
+                st.session_state.t1_area = new_text 
+                
                 genai.delete_file(uploaded_v.name)
                 st.success("Xong Bước 1!")
             except Exception as e:
                 st.error(f"Lỗi: {e}")
 
-    # ĐÃ SỬA: Luôn hiển thị Bảng Bước 2 để bạn có thể Dán trực tiếp SRT mà không cần qua Bước 1
     st.divider()
     st.subheader("📝 Bước 2: Đối chiếu & Sửa bản dịch (Có thể dán thẳng SRT vào đây)")
     col_t1, col_t2 = st.columns(2)
@@ -349,7 +351,6 @@ with tab1:
                 f.write(filter_only_vietnamese_srt(adj_srt))
             create_ass_file(adj_srt, "t1_sub.ass", t1_display_mode, t1_outline_size, t1_font_size)
             
-            # Cần kiểm tra xem có video tạm để ghép không
             if not st.session_state.t1_temp_video_path or not os.path.exists(st.session_state.t1_temp_video_path):
                 st.error("Chưa có file video nguồn. Hãy tải video ở Bước 1 (dù không bấm quét AI cũng cần phải tải/dán link video).")
             else:
@@ -437,13 +438,17 @@ with tab2:
                     [Nhập bản dịch Tiếng Việt vào đây]"""
                 
                 res = model.generate_content([prompt, uploaded_v])
-                st.session_state.t2_srt_content = res.text.strip().replace('```srt', '').replace('```', '').strip()
+                new_text = res.text.strip().replace('```srt', '').replace('```', '').strip()
+                
+                # --- ĐÃ SỬA: Ép giao diện cập nhật ngay lập tức ---
+                st.session_state.t2_srt_content = new_text
+                st.session_state.t2_area = new_text
+                
                 genai.delete_file(uploaded_v.name)
                 st.success("Xong Bước 2!")
             except Exception as e:
                 st.error(f"Lỗi: {e}")
 
-    # ĐÃ SỬA: Bảng Bước 3 ở tab Lồng tiếng cũng luôn được hiển thị
     st.divider()
     st.subheader("3️⃣ Chỉnh sửa Dịch thuật & Tải Audio")
     
@@ -502,17 +507,14 @@ with tab2:
                 ts = int(time.time())
                 out_vid = os.path.join(OUTPUT_DIR, f"dubbed_{ts}.mp4")
                 
-                # Tạo file phụ đề
                 create_ass_file(t2_edited, "t2_sub.ass", t2_display_mode, t2_outline, t2_font)
                 ass_abspath = os.path.abspath("t2_sub.ass").replace('\\', '/').replace(':', '\\:')
                 
-                # Cấu trúc lệnh FFmpeg
                 cmd = ["ffmpeg", "-y", "-i", st.session_state.t2_temp_video_path]
                 
                 mapped_count = min(len(parsed_data), len(sorted_audios))
                 
                 if mapped_count == 0:
-                    # Nếu không có audio nào, chỉ ghép sub và chỉnh âm gốc
                     cmd.extend([
                         "-vf", f"subtitles='{ass_abspath}'",
                         "-filter:a", f"volume={orig_vol/100.0}",
