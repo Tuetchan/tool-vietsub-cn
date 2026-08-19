@@ -129,11 +129,22 @@ def renumber_srt_blocks(srt_text):
     new_blocks = []
     idx = 1
     for block in blocks:
-        lines = block.strip().split('\n')
-        if len(lines) >= 3:
-            lines[0] = str(idx)
-            new_blocks.append('\n'.join(lines))
+        lines = [line.strip() for line in block.strip().split('\n') if line.strip()]
+        if not lines: continue
+        
+        timecode_idx = -1
+        for i, line in enumerate(lines):
+            if '-->' in line:
+                timecode_idx = i
+                break
+        
+        if timecode_idx != -1 and timecode_idx < len(lines) - 1:
+            timecode_line = lines[timecode_idx]
+            text_lines = lines[timecode_idx+1:]
+            new_block = f"{idx}\n{timecode_line}\n" + '\n'.join(text_lines)
+            new_blocks.append(new_block)
             idx += 1
+            
     return '\n\n'.join(new_blocks)
 
 def filter_only_vietnamese_srt(srt_text):
@@ -264,14 +275,19 @@ def parse_srt_to_dict(srt_text):
         if len(lines) >= 3:
             time_match = re.match(r'((?:\d{1,2}:)?\d{1,2}:\d{1,2}(?:[,\.]\d{1,3})?)\s*-->\s*((?:\d{1,2}:)?\d{1,2}:\d{1,2}(?:[,\.]\d{1,3})?)', lines[1].strip())
             if time_match:
-                zh_text = re.sub(r'\[(TOP|MID|BOTTOM)\]\s*', '', lines[-2].strip(), flags=re.IGNORECASE)
+                raw_zh = lines[-2].strip()
+                zh_text = re.sub(r'\[(TOP|MID|BOTTOM)\]\s*', '', raw_zh, flags=re.IGNORECASE)
                 vi_text = re.sub(r'\[(TOP|MID|BOTTOM)\]\s*', '', lines[-1].strip(), flags=re.IGNORECASE)
+                
+                is_mid = "[MID]" in raw_zh.upper()
+                
                 parsed.append({
                     "id": idx + 1,
                     "time": lines[1].strip(),
                     "start_ms": time_to_ms(time_match.group(1)),
                     "zh": zh_text,
-                    "vi": vi_text
+                    "vi": vi_text,
+                    "is_mid": is_mid
                 })
     return parsed
 
@@ -280,10 +296,10 @@ tab1, tab2 = st.tabs(["🎬 Tự Động Vietsub (Tiêu Chuẩn)", "🎙️ CapC
 
 PROMPT_AUTO_TRANS = """Bạn là Cỗ Máy OCR và Dịch Thuật siêu việt. ĐỌC CHỮ TRÊN MÀN HÌNH VÀ NGHE ÂM THANH.
 QUY TẮC TỐI THƯỢNG (NẾU VI PHẠM SẼ BỊ PHẠT NẶNG):
-1. KHÔNG ĐƯỢC BỎ SÓT BẤT KỲ CÂU NÀO.
-2. TUYỆT ĐỐI KHÔNG GỘP CÂU THEO NGỮ NGHĨA! Mỗi khi dòng chữ trên màn hình thay đổi, BẠN BẮT BUỘC PHẢI TẠO MỘT KHỐI THỜI GIAN SRT MỚI.
-3. Độ dài câu dịch Tiếng Việt phải tương đương với chữ trên màn hình lúc đó, không được dịch dư.
-4. Đánh dấu [TOP], [MID], [BOTTOM] đầu câu tiếng Trung.
+1. KHÔNG ĐƯỢC BỎ SÓT BẤT KỲ CÂU NÀO: Phải quét từ giây đầu tiên đến giây cuối cùng.
+2. TUYỆT ĐỐI KHÔNG GỘP CÂU! Khung hình chuyển chữ là phải ngắt mốc thời gian riêng biệt.
+3. Đánh dấu [TOP], [MID], [BOTTOM] đầu câu tiếng Trung.
+4. ĐÁNH SỐ THỨ TỰ LIÊN TỤC VÀ KHÔNG BỎ NHẢY SỐ (1, 2, 3...).
 Định dạng SRT chuẩn:
 1
 00:00:01,000 --> 00:00:03,000
@@ -294,8 +310,9 @@ PROMPT_ONLY_OCR = """Bạn là Cỗ Máy OCR siêu việt. CHỈ ĐỌC CHỮ C�
 QUY TẮC TỐI THƯỢNG (NẾU VI PHẠM SẼ BỊ PHẠT NẶNG):
 1. KHÔNG ĐƯỢC BỎ SÓT BẤT KỲ DÒNG CHỮ NÀO.
 2. TUYỆT ĐỐI KHÔNG GỘP CÂU! Màn hình hiện bao nhiêu chữ, chép đúng bấy nhiêu. 
-3. Cứ mỗi lần dòng chữ trên màn hình đổi cảnh, BẠN PHẢI NGẮT MỐC THỜI GIAN VÀ TẠO KHỐI SRT MỚI NGAY LẬP TỨC. Không được nối 2 màn hình chữ lại với nhau làm một.
+3. Cứ mỗi lần dòng chữ trên màn hình đổi cảnh, BẠN PHẢI NGẮT MỐC THỜI GIAN VÀ TẠO KHỐI SRT MỚI NGAY LẬP TỨC.
 4. Đánh dấu [TOP], [MID], [BOTTOM] đầu câu tiếng Trung.
+5. ĐÁNH SỐ THỨ TỰ LIÊN TỤC VÀ KHÔNG BỎ NHẢY SỐ (1, 2, 3...).
 Định dạng SRT BẮT BUỘC:
 1
 00:00:01,000 --> 00:00:03,000
@@ -376,7 +393,6 @@ with tab1:
                         start_t += chunk_sec
                         idx += 1
                         
-                    # HIỂN THỊ DANH SÁCH ĐÃ CẮT CHO NGƯỜI DÙNG DỄ KIỂM SOÁT
                     st.markdown("📁 **Danh sách các đoạn video nháp đã được gửi đi phân tích:**")
                     for i, (chunk_file, start_time_sec) in enumerate(chunks):
                         st.write(f"▫️ **Phần {i+1}**: Từ giây thứ {start_time_sec} đến giây thứ {min(start_time_sec + chunk_sec, total_duration)}")
@@ -411,6 +427,7 @@ with tab1:
                     st.info("⚡ AI đang quét...")
                     res = model.generate_content([prompt, uploaded_v])
                     full_srt_text = res.text.strip().replace('```srt', '').replace('```', '').strip()
+                    full_srt_text = renumber_srt_blocks(full_srt_text)
                     genai.delete_file(uploaded_v.name)
                     st.success("Xong Bước 1!")
 
@@ -431,7 +448,7 @@ with tab1:
         if not t1_edited.strip():
             st.error("Nội dung phụ đề đang trống! Vui lòng cho AI quét hoặc tự dán SRT vào bảng trên.")
         else:
-            st.info("Đang lấy video GỐC NGUYÊN VẸN để ốp phụ đề lên...")
+            st.info("Đang chuẩn bị video nguồn để ghép...")
             current_render_video = "t1_render_source.mp4"
             cleanup_files(current_render_video, "t1_sub.srt", "t1_sub.ass")
 
@@ -450,7 +467,9 @@ with tab1:
 
             ts = int(time.time())
             out_vid = os.path.join(OUTPUT_DIR, f"vid_t1_{ts}.mp4")
-            adj_srt = apply_timing_offsets(t1_edited, t1_s_off, t1_e_off)
+            
+            safe_edited = renumber_srt_blocks(t1_edited)
+            adj_srt = apply_timing_offsets(safe_edited, t1_s_off, t1_e_off)
             
             with open("t1_sub.srt", "w", encoding="utf-8") as f:
                 f.write(filter_only_vietnamese_srt(adj_srt))
@@ -463,7 +482,7 @@ with tab1:
             cmd.append(out_vid)
             
             subprocess.run(cmd, check=True)
-            st.success("Xong! Cuộn xuống cuối trang để tải video. Bạn có thể yên tâm video cuối cùng hoàn toàn liền mạch!")
+            st.success("Xong! Cuộn xuống cuối trang để tải video.")
             st.rerun()
 
 # ==========================================
@@ -563,6 +582,7 @@ with tab2:
                     st.info("⚡ Đang quét Text...")
                     res = model.generate_content([prompt, uploaded_v])
                     full_srt_text = res.text.strip().replace('```srt', '').replace('```', '').strip()
+                    full_srt_text = renumber_srt_blocks(full_srt_text)
                     genai.delete_file(uploaded_v.name)
                     st.success("Xong Bước 2!")
                 
@@ -578,7 +598,7 @@ with tab2:
     
     col_info, col_clear_audio = st.columns([8, 2])
     with col_info:
-        st.info("Bảng 2: Tải lên các file Audio lồng tiếng (Sẽ được ghép theo thứ tự thời gian ở bảng trên).")
+        st.info("Bảng 2: Tải lên các file Audio lồng tiếng (Sẽ được ghép theo thứ tự 1:1, khớp chỉ số với bảng trên).")
     with col_clear_audio:
         if st.button("🗑️ Xóa tất cả Audio"):
             st.session_state.audio_uploader_key = f"audio_uploader_{time.time()}"
@@ -592,12 +612,26 @@ with tab2:
         if not t2_edited.strip():
             st.error("Bảng SRT trống, không thể kết hợp!")
         else:
-            parsed_data = parse_srt_to_dict(t2_edited)
+            safe_edited = renumber_srt_blocks(t2_edited)
+            parsed_data = parse_srt_to_dict(safe_edited)
             sorted_audios = sorted(t2_audios, key=lambda x: x.name) if t2_audios else []
             
             table_data = []
+            
+            # ĐÃ SỬA TẬN GỐC: Ánh xạ 1:1 giữa Dòng phụ đề (i) và Audio (i)
             for i, item in enumerate(parsed_data):
-                audio_name = sorted_audios[i].name if i < len(sorted_audios) else "Không có audio"
+                if i < len(sorted_audios):
+                    audio_file = sorted_audios[i]
+                    if item['is_mid']:
+                        audio_name = f"🔇 Bỏ qua {audio_file.name} (Do có Tag [MID])"
+                    else:
+                        audio_name = audio_file.name
+                else:
+                    if item['is_mid']:
+                        audio_name = "🔇 Bỏ qua (Tag [MID])"
+                    else:
+                        audio_name = "⚠️ Không có audio"
+                        
                 table_data.append({
                     "Thời gian": item['time'],
                     "Tiếng Trung": item['zh'],
@@ -627,7 +661,7 @@ with tab2:
             st.error("Bảng SRT đang trống! Hãy quét AI hoặc dán SRT của bạn vào Bước 3.")
         else:
             try:
-                st.info("Đang lấy video GỐC NGUYÊN VẸN để ghép phụ đề và âm thanh...")
+                st.info("Đang chuẩn bị video nguồn để ghép...")
                 current_render_video = "t2_render_source.mp4"
                 cleanup_files(current_render_video, "t2_sub.ass")
 
@@ -643,18 +677,30 @@ with tab2:
                     with open(current_render_video, "wb") as f:
                         f.write(t2_uploaded.getbuffer())
 
-                parsed_data = parse_srt_to_dict(t2_edited)
+                safe_edited = renumber_srt_blocks(t2_edited)
+                parsed_data = parse_srt_to_dict(safe_edited)
                 sorted_audios = sorted(t2_audios, key=lambda x: x.name) if t2_audios else []
+                
+                # ÁNH XẠ 1-1 TUYỆT ĐỐI CHO FFMPEG
+                mapped_audio_data = []
+                for i, item in enumerate(parsed_data):
+                    if item['is_mid']:
+                        mapped_audio_data.append(None) # Skip entirely
+                    else:
+                        if i < len(sorted_audios):
+                            mapped_audio_data.append(sorted_audios[i])
+                        else:
+                            mapped_audio_data.append(None)
                 
                 ts = int(time.time())
                 out_vid = os.path.join(OUTPUT_DIR, f"dubbed_{ts}.mp4")
                 
-                create_ass_file(t2_edited, "t2_sub.ass", t2_display_mode, t2_outline, t2_font)
+                create_ass_file(safe_edited, "t2_sub.ass", t2_display_mode, t2_outline, t2_font)
                 ass_abspath = os.path.abspath("t2_sub.ass").replace('\\', '/').replace(':', '\\:')
                 
                 cmd = ["ffmpeg", "-y", "-i", current_render_video]
                 
-                mapped_count = min(len(parsed_data), len(sorted_audios))
+                mapped_count = sum(1 for a in mapped_audio_data if a is not None)
                 
                 if mapped_count == 0:
                     cmd.extend([
@@ -666,17 +712,20 @@ with tab2:
                     filter_complex = f"[0:a]volume={orig_vol/100.0}[orig_a];"
                     mix_inputs = "[orig_a]"
                     
-                    for i in range(mapped_count):
-                        audio_file = sorted_audios[i]
-                        temp_a_path = f"t2_temp_audio_{i}.mp3"
-                        with open(temp_a_path, "wb") as f:
-                            f.write(audio_file.read())
-                        cmd.extend(["-i", temp_a_path])
-                        
-                        delay_ms = parsed_data[i]['start_ms']
-                        idx = i + 1
-                        filter_complex += f"[{idx}:a]adelay={delay_ms}|{delay_ms},volume={dub_vol/100.0}[a{idx}];"
-                        mix_inputs += f"[a{idx}]"
+                    valid_audio_index = 1
+                    for i, item in enumerate(parsed_data):
+                        audio_file = mapped_audio_data[i]
+                        if audio_file is not None:
+                            temp_a_path = f"t2_temp_audio_{valid_audio_index}.mp3"
+                            with open(temp_a_path, "wb") as f:
+                                f.write(audio_file.read())
+                                audio_file.seek(0)
+                            cmd.extend(["-i", temp_a_path])
+                            
+                            delay_ms = item['start_ms']
+                            filter_complex += f"[{valid_audio_index}:a]adelay={delay_ms}|{delay_ms},volume={dub_vol/100.0}[a{valid_audio_index}];"
+                            mix_inputs += f"[a{valid_audio_index}]"
+                            valid_audio_index += 1
                         
                     filter_complex += f"{mix_inputs}amix=inputs={mapped_count+1}:duration=first:normalize=0[aout]"
                     
@@ -688,7 +737,7 @@ with tab2:
                     ])
                 
                 subprocess.run(cmd, check=True)
-                st.success("🎉 Xuất Video Lồng Tiếng Thành Công! Bạn yên tâm video tải về dưới đây là bản gốc dính liền, không hề bị rách.")
+                st.success("🎉 Xuất Video Lồng Tiếng Thành Công!")
                 st.rerun()
             except Exception as e:
                 st.error(f"Lỗi render: {e}")
